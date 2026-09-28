@@ -1,8 +1,10 @@
 # Riley's notebook and shared meeting recaps
 
-Thirty-six fictional Markdown documents for local ingestion demos and future
-retrieval and citation tests. They use ordinary Markdown, without Obsidian
-wikilinks.
+Thirty-six fictional Markdown documents for local ingestion demos and the
+real-model retrieval and citation tests. The tests use bounded
+[search expectations](../search-relevance.json); they do not establish support
+for arbitrary natural-language questions or generated answers. The documents use
+ordinary Markdown, without Obsidian wikilinks.
 
 For the story, relationships, chronology, and continuity rules behind these
 documents, see the [fixture narrative](OVERVIEW.md). That overview is a maintainer
