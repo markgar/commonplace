@@ -74,7 +74,9 @@ pub fn isolated_command(binary: impl AsRef<std::ffi::OsStr>, home: &std::path::P
     command
         .env("HOME", home)
         .env("XDG_CONFIG_HOME", home.join("config"))
-        .env("APPDATA", home.join("appdata"));
+        .env("APPDATA", home.join("appdata"))
+        .env_remove("COMMONPLACE_STORE")
+        .env_remove("COMMONPLACE_MODEL_CACHE");
     command
 }
 
