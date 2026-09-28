@@ -48,9 +48,24 @@ never silently let the child implement an older contract.
 
 Every child kickoff must include: packet issue, specification index and relevant
 sections, approved revision/base, dependencies, owned surfaces, smallest complete
-acceptance outcome, local-only checks, approval boundaries, the independent
-plan-review gate below, and report-back instructions. Every child must read those
-sources, not rely only on the prompt.
+acceptance outcome, local-only checks, isolated build-output directory, approval
+boundaries, the independent plan-review gate below, and report-back instructions.
+Every child must read those sources, not rely only on the prompt.
+
+## Isolate build output per worktree
+
+- Every session builds and runs tests using its own worktree-local `target/`.
+  Leave `CARGO_TARGET_DIR` unset or set it to that worktree's absolute `target`
+  path. Never point multiple sessions at the same target directory.
+- Separate source worktrees do not isolate shared build output. Cargo build locks
+  do not protect a test run from another session replacing its executable.
+  Do not share mutable executables or hardlink/symlink mutable build artifacts
+  across sessions, or serialize otherwise independent work to compensate for sharing.
+- Read-only pinned model artifacts and normal package-manager caches may be
+  shared. Extra build time or disk usage is preferable to mixing artifacts.
+- Run acceptance against the executable built from the reported source revision.
+  If shared output contaminated a run, repeat it with isolated output; do not
+  treat the affected result as evidence about that session's code.
 
 ## Independent plan review before implementation
 
