@@ -36,7 +36,7 @@ Commonplace has two complementary query paths:
 
 1. **Hybrid search** finds relevant passages using lexical retrieval, vector
    retrieval, deterministic fusion, and local reranking.
-2. **Graph query** executes read-only Cypher over explicitly authored entities,
+2. **Graph query** executes read-only SPARQL SELECT over explicitly authored entities,
    types, relationships, and literal facts.
 
 Both paths return canonical identifiers that resolve to exact evidence in
@@ -51,7 +51,7 @@ The following rules apply throughout the design:
 3. Every citation resolves to a canonical passage and source revision.
 4. Authored knowledge changes only through explicit record, withdraw, and source
    removal operations.
-5. Grafeo contains a complete, derived projection of active knowledge and can
+5. Oxigraph contains a complete, derived RDF projection of active knowledge and can
    be rebuilt from SQLite.
 6. Graph reads fail when the graph version does not match SQLite.
 7. Ingestion is batch-first, synchronous, bounded in memory, and independently
