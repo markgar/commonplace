@@ -95,14 +95,14 @@ commonplace ingest document-a.md document-b.md
 commonplace ingest ./notes --recursive
 commonplace ingest --stdin --source-key teams/message/123
 commonplace ingest --jsonl documents.jsonl
-commonplace ingest --manifest corpus.json
+producer | commonplace ingest --jsonl -
 ```
 
 Direct file and directory inputs accept Markdown and plain UTF-8 text. Their
 default source key is a `file:` URI derived from the normalized absolute path,
 so direct and directory ingestion of the same file use the same identity and
 different scan roots cannot conflate unrelated files. Moving a file creates a
-new source unless a manifest or streamed input supplies a stable key.
+new source unless streamed input supplies a stable key.
 Directory scans support `.md` and `.txt`, recurse only when requested, skip
 symlinks by default, and preserve Markdown as text rather than extracting
 domain-specific records. Repeated include and exclude globs may narrow a scan.
@@ -126,14 +126,33 @@ File defaults are title equal to the filename, source type `file`, no source tim
 and empty metadata. `--title`, `--source-type`, `--occurred-at`, and `--metadata`
 override those fields for every document in that command. The metadata argument
 is a JSON object using persistence's canonical value set; timestamps normalize
-to UTC RFC 3339. These file overrides do not add streamed input or manifest
-support to P3.
+to UTC RFC 3339. P3 establishes these file overrides; P9 adds generic streamed
+inputs.
 
-Other systems can normalize email, chat, web, PDF, or connector content into
-stdin or JSON Lines input. Format-specific acquisition does not create a
-separate storage or indexing pipeline. Each JSON Lines record is self-contained.
-JSON Lines and manifest records may provide stable source keys and explicit
-metadata.
+Acquisition and format extraction belong entirely to the caller. Commonplace
+accepts already-normalized text through stdin and JSON Lines, not email, web,
+PDF, service, or provider-specific connectors. Manifest input is deferred:
+saved JSON Lines already serves the current agent workflow without another
+batch envelope or path-reference mapping format.
+
+Exactly one input mode is selected. `--stdin` accepts one exact UTF-8 document
+and requires `--source-key`; the existing metadata flags apply to that document.
+JSON Lines accepts a filename or `-` for stdin. Each physical line is a
+self-contained object with required string `source_key` and `text`, optional
+`title`, `source_type`, `occurred_at`, and `metadata`, and no unknown or duplicate
+object fields. JSON Lines rejects command-level metadata overrides. Streamed
+defaults are null title/time, source type `text`, and empty metadata. Source
+keys are opaque, nonempty, NUL-free strings in the existing shared namespace;
+they are not trimmed, case-folded, or derived from input locations.
+
+Blank JSON Lines records are invalid; a final record without a newline is
+accepted. LF/CRLF record delimiters are excluded from `--max-json-bytes`, which
+bounds each encoded record as well as canonical metadata. Decoded text also
+obeys `--max-source-bytes`. Oversized records stop immediately with a terminal
+failed item, without draining remaining input. Each physical record consumes
+one `--max-documents` slot; excess input yields one terminal failed item without
+parsing or publishing another document. Prior publications remain successful.
+Empty JSON Lines input returns an empty complete result.
 
 ### 3.3 Revisions
 
@@ -151,7 +170,7 @@ title, source type, occurred-at time, and custom metadata.
 
 One command accepts one or many documents. It:
 
-1. validates command options and any manifest envelope;
+1. validates command options before reading documents;
 2. enumerates inputs without retaining complete document bodies in memory;
 3. reports a malformed JSON Lines record or repeated source key as a failed
    item while preserving earlier publications;
@@ -594,7 +613,12 @@ commonplace graph schema --json
 ```
 
 Descriptions are generated from the validators used by execution and include an
-input JSON Schema plus a minimal valid example. `commonplace record --describe` also
+input JSON Schema plus a minimal valid example. `ingest --describe` additionally
+provides `record_schema` and `record_example` for self-contained JSON Lines
+records, without changing other commands' description envelopes. A null command
+`source_type` selects the input mode's default; record source types remain
+non-null strings. Duplicate fields and canonical metadata/time/byte-limit rules
+are also checked during execution. `commonplace record --describe` also
 includes current entity types, predicates, endpoint rules, literal kinds, and
 schema version. The project does not maintain a second hand-written contract
 model.
