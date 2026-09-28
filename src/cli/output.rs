@@ -26,6 +26,7 @@ pub enum CommandResult {
     Apply(ApplyResult),
     Vocabulary(Vocabulary),
     Description(Description),
+    IngestDescription(super::ingest::IngestDescription),
     Ingest(crate::app::ingest::IngestResult),
     Get(crate::app::get::Record),
     Record(crate::app::record::RecordResult),

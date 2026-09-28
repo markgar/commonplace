@@ -15,6 +15,349 @@ use commonplace::{CommonplaceError, Result};
 use serde_json::{Value, json};
 
 use common::Store;
+use commonplace::adapters::streams::JsonLines;
+
+fn stream_run(store: &Store, args: &[&str], text: &[u8]) -> (i32, Value) {
+    let mut command = store.command();
+    command.args(args).env(
+        "COMMONPLACE_MODEL_CACHE",
+        store.directory.path().join("missing-cache"),
+    );
+    let output = common::with_stdin(command, text);
+    assert!(output.stderr.is_empty(), "{output:?}");
+    (
+        output.status.code().unwrap(),
+        serde_json::from_slice(&output.stdout).unwrap(),
+    )
+}
+
+#[test]
+fn public_stream_modes_preserve_identity_defaults_and_file_behavior() {
+    let store = Store::new();
+    let graph = graph_files(&store);
+    let (exit, first) = stream_run(
+        &store,
+        &["ingest", "--stdin", "--source-key", " notes/42 "],
+        b"",
+    );
+    assert_eq!(exit, 0);
+    assert_eq!(first["result"]["summary"]["added"], 1);
+    let item = &first["result"]["items"][0];
+    assert_eq!(item["input"], "stdin");
+    assert_eq!(item["source_key"], " notes/42 ");
+    let revision = store.success(&["get", item["revision_id"].as_str().unwrap()]);
+    assert_eq!(revision["result"]["source_type"], "text");
+    assert_eq!(revision["result"]["title"], Value::Null);
+    assert_eq!(revision["result"]["occurred_at"], Value::Null);
+    assert_eq!(revision["result"]["metadata"], json!({}));
+    let record = br#"{"source_key":" notes/42 ","text":""}"#;
+    let (_, same) = stream_run(&store, &["ingest", "--jsonl", "-"], record);
+    assert_eq!(same["result"]["summary"]["unchanged"], 1);
+    assert_eq!(
+        same["result"]["items"][0]["revision_id"],
+        item["revision_id"]
+    );
+    let (_, updated) = stream_run(
+        &store,
+        &["ingest", "--jsonl", "-"],
+        br#"{"source_key":" notes/42 ","text":"","metadata":{"a":1}}"#,
+    );
+    assert_eq!(updated["result"]["summary"]["updated"], 1);
+    assert_eq!(
+        updated["result"]["items"][0]["document_id"],
+        item["document_id"]
+    );
+    assert_ne!(
+        updated["result"]["items"][0]["revision_id"],
+        item["revision_id"]
+    );
+    let (_, new_key) = stream_run(
+        &store,
+        &["ingest", "--stdin", "--source-key", "notes/42"],
+        b"",
+    );
+    assert_ne!(
+        new_key["result"]["items"][0]["document_id"],
+        item["document_id"]
+    );
+
+    let file = store.directory.path().join("empty.md");
+    std::fs::write(&file, "").unwrap();
+    let file_result = store.success(&["ingest", file.to_str().unwrap()]);
+    let file_item = &file_result["result"]["items"][0];
+    let (_, same_file) = stream_run(
+        &store,
+        &[
+            "ingest",
+            "--stdin",
+            "--source-key",
+            file_item["source_key"].as_str().unwrap(),
+            "--source-type",
+            "file",
+            "--title",
+            "empty.md",
+        ],
+        b"",
+    );
+    assert_eq!(same_file["result"]["summary"]["unchanged"], 1);
+    assert_eq!(
+        same_file["result"]["items"][0]["revision_id"],
+        file_item["revision_id"]
+    );
+    let batch_path = store.directory.path().join("batch.jsonl");
+    std::fs::write(&batch_path, record).unwrap();
+    let disk = store.success(&["ingest", "--jsonl", batch_path.to_str().unwrap()]);
+    assert_eq!(
+        disk["result"]["items"][0]["document_id"],
+        item["document_id"]
+    );
+    assert_eq!(graph_files(&store), graph);
+    assert_indexes(&store);
+}
+
+#[test]
+fn public_stream_failures_and_terminal_caps_preserve_prior_successes() {
+    let store = Store::new();
+    let records = b"{\"source_key\":\"a\",\"text\":\"\"}\n{bad}\n{\"source_key\":\"a\",\"text\":\"\"}\n{\"source_key\":\"b\",\"text\":\"\"}";
+    let (exit, result) = stream_run(&store, &["ingest", "--jsonl", "-"], records);
+    assert_eq!(exit, 2);
+    assert_eq!(result["status"], "partial");
+    assert_eq!(
+        result["result"]["summary"],
+        json!({"added":2,"updated":0,"unchanged":0,"failed":2})
+    );
+    assert_eq!(result["result"]["items"][1]["input"], "stdin:2");
+    assert_eq!(result["result"]["items"][1]["source_key"], Value::Null);
+    assert_eq!(result["result"]["items"][2]["source_key"], "a");
+    for index in [1, 2] {
+        let item = &result["result"]["items"][index];
+        assert_eq!(item["document_id"], Value::Null);
+        assert_eq!(item["revision_id"], Value::Null);
+        assert_eq!(item["passage_ids"], json!([]));
+        assert_eq!(item["error"]["code"], "invalid_input");
+    }
+    let (exit, capped) = stream_run(
+        &store,
+        &["ingest", "--jsonl", "-", "--max-documents", "1"],
+        records,
+    );
+    assert_eq!(exit, 2);
+    assert_eq!(
+        capped["result"]["summary"],
+        json!({"added":0,"updated":0,"unchanged":1,"failed":1})
+    );
+    assert_eq!(
+        capped["result"]["items"][1]["error"]["code"],
+        "limit_exceeded"
+    );
+    let mut oversized = b"{\"source_key\":\"a\",\"text\":\"\"}\n".to_vec();
+    oversized.extend(vec![b'x'; 100000]);
+    oversized.extend(b"\n{\"source_key\":\"never\",\"text\":\"\"}");
+    let (exit, capped) = stream_run(
+        &store,
+        &["ingest", "--jsonl", "-", "--max-json-bytes", "32"],
+        &oversized,
+    );
+    assert_eq!(exit, 2);
+    assert_eq!(capped["result"]["items"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        capped["result"]["items"][1]["error"]["code"],
+        "limit_exceeded"
+    );
+    for (bytes, code) in [
+        (b"\xff".as_slice(), "invalid_input"),
+        (b"abcd", "limit_exceeded"),
+    ] {
+        let (exit, failed) = stream_run(
+            &store,
+            &[
+                "ingest",
+                "--stdin",
+                "--source-key",
+                "failed",
+                "--max-source-bytes",
+                "3",
+            ],
+            bytes,
+        );
+        assert_eq!(exit, 2);
+        assert_eq!(failed["status"], "failed");
+        assert_eq!(failed["result"]["items"][0]["source_key"], "failed");
+        assert_eq!(failed["result"]["items"][0]["error"]["code"], code);
+    }
+    let (_, empty) = stream_run(&store, &["ingest", "--jsonl", "-"], b"");
+    assert_eq!(empty["status"], "complete");
+    assert_eq!(empty["result"]["items"], json!([]));
+    assert_indexes(&store);
+}
+
+#[test]
+fn stream_options_and_descriptions_validate_without_input_or_store_mutation() {
+    let store = Store::new();
+    let before = store.files();
+    for args in [
+        vec!["ingest", "--stdin"],
+        vec!["ingest", "--source-key", "a"],
+        vec!["ingest", "--stdin", "--source-key", "a", "--jsonl", "-"],
+        vec!["ingest", "--stdin", "--source-key", "a", "file.txt"],
+        vec!["ingest", "--jsonl", "-", "--title", "ignored"],
+        vec!["ingest", "--jsonl", "-", "--source-type", "file"],
+        vec!["ingest", "--jsonl", "-", "--metadata", "{}"],
+        vec!["ingest", "--jsonl", "-", "--recursive"],
+    ] {
+        let output = store.run(&args);
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
+        assert!(output.stdout.is_empty());
+    }
+    store.failure(
+        &["ingest", "--stdin", "--source-key", ""],
+        "invalid_input",
+        2,
+    );
+    let description = store.success(&["ingest", "--describe"]);
+    let command_validator =
+        jsonschema::validator_for(&description["result"]["input_schema"]).unwrap();
+    let mut example = description["result"]["example"].clone();
+    assert!(command_validator.is_valid(&example));
+    example["paths"] = json!([]);
+    assert!(!command_validator.is_valid(&example));
+    example["stdin"] = json!(true);
+    example["source_key"] = json!("key");
+    assert!(command_validator.is_valid(&example));
+    example["jsonl"] = json!("-");
+    assert!(!command_validator.is_valid(&example));
+    example["stdin"] = json!(false);
+    example["source_key"] = Value::Null;
+    assert!(command_validator.is_valid(&example));
+    example["source_type"] = json!("file");
+    assert!(!command_validator.is_valid(&example));
+    let record_schema = &description["result"]["record_schema"];
+    let record = &description["result"]["record_example"];
+    assert!(jsonschema::is_valid(record_schema, record));
+    assert!(
+        commonplace::adapters::streams::parse_record(&serde_json::to_vec(record).unwrap()).is_ok()
+    );
+    store.assert_files(&before);
+}
+
+#[test]
+fn normalized_stream_pipeline_retains_exact_revisions_and_independent_errors() {
+    let store = Store::new();
+    let graph = graph_files(&store);
+    let mut model = DeterministicModel::default();
+    let config = OperationConfig {
+        maximum_source_bytes: 128,
+        ..Default::default()
+    };
+    let text = "\u{feff}Exact\r\n\0e\u{301}\u{1f980}\n";
+    let record = json!({"source_key":"key","text":text,"metadata":{"b":[true,null],"a":1}});
+    let ingest_record = |value: &Value, model: &mut DeterministicModel| {
+        let bytes = serde_json::to_vec(value).unwrap();
+        ingest::ingest(
+            &store.root,
+            JsonLines::new(bytes.as_slice(), "stdin".into(), 4096, 1000),
+            model,
+            &config,
+        )
+        .unwrap()
+    };
+    let added = ingest_record(&record, &mut model);
+    let old_id = added.items[0].revision_id.unwrap();
+    let old = serde_json::to_value(get::get(&store.root, &old_id.to_string()).unwrap()).unwrap();
+    assert_eq!(old["text"], text);
+    let calls = model.calls.len();
+    let mut reordered = record.clone();
+    reordered["metadata"] = json!({"a":1,"b":[true,null]});
+    let same = ingest_record(&reordered, &mut model);
+    assert_eq!(same.summary.unchanged, 1);
+    assert_eq!(model.calls.len(), calls);
+    reordered["metadata"]["a"] = json!(2);
+    let updated = ingest_record(&reordered, &mut model);
+    assert_eq!(updated.summary.updated, 1);
+    assert_eq!(updated.items[0].document_id, added.items[0].document_id);
+    assert_ne!(updated.items[0].revision_id, added.items[0].revision_id);
+    let bad = [
+        json!({"source_key":"large","text":"x".repeat(129)}),
+        json!({"source_key":"float","text":"","metadata":{"x":1.5}}),
+        json!({"source_key":"time","text":"","occurred_at":"not a timestamp"}),
+        json!({"source_key":"model","text":"MODEL_FAILURE"}),
+        json!({"source_key":"after","text":"After failed records"}),
+    ]
+    .iter()
+    .map(|v| format!("{v}\n"))
+    .collect::<String>();
+    let failures = ingest::ingest(
+        &store.root,
+        JsonLines::new(bad.as_bytes(), "stdin".into(), 4096, 1000),
+        &mut model,
+        &config,
+    )
+    .unwrap();
+    assert_eq!(failures.summary.failed, 4);
+    assert_eq!(failures.summary.added, 1);
+    assert_eq!(failures.exit_code, 1);
+    assert_eq!(model.loads, 1);
+    let old_again =
+        serde_json::to_value(get::get(&store.root, &old_id.to_string()).unwrap()).unwrap();
+    assert_eq!(old_again, old);
+    assert_eq!(graph_files(&store), graph);
+    assert_indexes(&store);
+}
+
+#[test]
+fn missing_store_never_consumes_lazy_input_and_stream_io_failure_is_terminal() {
+    let temp = tempfile::tempdir().unwrap();
+    let items = std::iter::once_with(|| panic!("must not consume stdin for missing store"));
+    assert!(
+        ingest::ingest(
+            &temp.path().join("missing"),
+            items,
+            &mut DeterministicModel::default(),
+            &OperationConfig::default()
+        )
+        .is_err()
+    );
+
+    struct FailingReader {
+        bytes: std::io::Cursor<Vec<u8>>,
+    }
+    impl std::io::Read for FailingReader {
+        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+            unreachable!()
+        }
+    }
+    impl std::io::BufRead for FailingReader {
+        fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+            if self.bytes.position() as usize == self.bytes.get_ref().len() {
+                Err(std::io::Error::other("injected stream failure"))
+            } else {
+                self.bytes.fill_buf()
+            }
+        }
+        fn consume(&mut self, count: usize) {
+            self.bytes.consume(count);
+        }
+    }
+    let store = Store::new();
+    let reader = FailingReader {
+        bytes: std::io::Cursor::new(b"{\"source_key\":\"a\",\"text\":\"\"}\n".to_vec()),
+    };
+    let result = ingest::ingest(
+        &store.root,
+        JsonLines::new(reader, "stdin".into(), 1024, 10),
+        &mut DeterministicModel::default(),
+        &OperationConfig::default(),
+    )
+    .unwrap();
+    assert_eq!(result.summary.added, 1);
+    assert_eq!(result.summary.failed, 1);
+    assert_eq!(result.exit_code, 1);
+    assert_eq!(
+        result.items[1].error.as_ref().unwrap().code,
+        "internal_error"
+    );
+    assert_indexes(&store);
+}
 
 #[derive(Default)]
 struct DeterministicModel {
