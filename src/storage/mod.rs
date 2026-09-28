@@ -3,6 +3,7 @@ pub mod documents;
 pub mod evidence;
 pub(crate) mod graph_snapshot;
 pub mod knowledge;
+pub mod search;
 pub mod search_index;
 pub mod vocabulary;
 

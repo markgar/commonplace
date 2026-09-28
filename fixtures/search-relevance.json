@@ -1,0 +1,33 @@
+[
+  {
+    "query": "Why was the Lantern pilot moved from October 5 to October 12?",
+    "top": 5,
+    "evidence": [
+      {"title": "2026-09-18 Pilot scope and schedule.md", "contains": "training clash"},
+      {"title": "2026-09-18 Pilot scope and schedule - AI summary.md", "contains": "training"}
+    ]
+  },
+  {
+    "query": "Which escalation intake channel replaced support-triage in the onboarding guide?",
+    "top": 5,
+    "evidence": [
+      {"title": "2026-09-21 Onboarding routing corrections.md", "contains": "#support-escalations"},
+      {"title": "2026-09-21 Onboarding routing corrections - AI summary.md", "contains": "#support-escalations"}
+    ]
+  },
+  {
+    "query": "Did the staffed-hours escalation trial establish a ten-minute acknowledgement SLA?",
+    "top": 5,
+    "evidence": [
+      {"title": "2026-09-25 Escalation trial check-in.md", "contains": "Ten minutes still NOT an SLA"},
+      {"title": "2026-09-25 Escalation trial check-in - AI summary.md", "contains": "has not become an SLA"}
+    ]
+  },
+  {
+    "query": "Was Riley's $60 Women in Tech supplies proposal permission to spend?",
+    "top": 5,
+    "evidence": [
+      {"title": "2026-09-16 Women in Tech budget.md", "contains": "$60 supplies idea is a proposal"}
+    ]
+  }
+]

@@ -29,6 +29,7 @@ pub enum CommandResult {
     IngestDescription(super::ingest::IngestDescription),
     Ingest(crate::app::ingest::IngestResult),
     Get(crate::app::get::Record),
+    Search(crate::domain::search::SearchResult),
     Record(crate::app::record::RecordResult),
     RecordDescription(super::record::Description),
 }

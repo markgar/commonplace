@@ -596,8 +596,9 @@ Do not estimate percentage complete or add a parallel dashboard/status document.
 
 The architecture fixes one implementation of each item below rather than
 supporting runtime alternatives. Their concrete values are selected and
-verified during the packaging and retrieval slices, then pinned as part of the
-store format:
+verified during the packaging and retrieval slices. Durable representation
+choices are pinned by the store format; P4 completes the initial query policy
+without changing the version-2 persisted representation:
 
 - embedding model and runtime;
 - embedding dimensions and normalization;
@@ -608,6 +609,18 @@ store format:
 - candidate limits;
 - fusion formula and constants; and
 - rerank limit.
+
+P4 pins 64 candidates per path, equal-weight reciprocal-rank fusion with constant
+60 and 1-based ranks, and at most 64 reranked passages in batches of eight.
+FTS BM25 and native SQLite `vec_distance_L2` order ascending with passage-ID ties;
+fusion orders descending with passage-ID ties; final reranker scores order
+descending with fusion-order ties. One extra candidate per path proves omission.
+The reranker is FastEmbed 7.1.0 with
+`jinaai/jina-reranker-v1-turbo-en@b8c14f4e723d9e0aab4732a7b7b93741eeeb77c2`,
+512-token pairs and two intra-operation threads, verified against the P2 hashes.
+These query-policy constants add no durable state and reinterpret no source,
+embedding, lexical, vector, or graph bytes. Representation changes still require
+the explicit treatment in persistence section 15.
 
 The following operational limits are explicit configuration:
 

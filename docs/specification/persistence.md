@@ -178,6 +178,17 @@ The implementation verifies:
 - vector dimensions match the store format; and
 - vector query results hydrate through the same passage ID.
 
+Search checks both index ID sets against canonical current passages in its one
+read snapshot, including empty indexes, and rejects incompatible vector
+declarations or missing/extra index rows without repair. Both candidate paths
+apply current-revision, source-type, and inclusive source-time predicates before
+their limits. Dense candidates use the stock sqlite-vec `vec_distance_L2` function
+inside SQLite over eligible `vec0` rows, with distance/passage-ID ordering.
+This exhaustive native SQL evaluation permits deterministic cutoff ties and
+prefiltering without an application-level vector scan or index-layout change.
+Work scales with the eligible corpus; only bounded candidates leave SQLite.
+The initial retrieval constants in implementation section 4 do not change `/2`.
+
 ## 7. User vocabulary
 
 ```sql
