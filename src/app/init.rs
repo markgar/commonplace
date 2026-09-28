@@ -4,10 +4,9 @@ use serde::Serialize;
 use tempfile::Builder;
 
 use crate::graph;
+use crate::storage::StoreConfig;
 use crate::storage::database::{STORE_FORMAT, SqliteDatabase};
 use crate::{CommonplaceError, Result};
-
-const CONFIG_FORMAT: &str = "commonplace-config/1";
 
 #[derive(Debug, Serialize)]
 pub struct InitResult {
@@ -16,35 +15,9 @@ pub struct InitResult {
     pub created: bool,
 }
 
-#[derive(Debug, Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct StoreConfig {
-    format: String,
-    database: String,
-    graph: String,
-}
-
-impl StoreConfig {
-    fn expected() -> Self {
-        Self {
-            format: CONFIG_FORMAT.to_owned(),
-            database: "commonplace.sqlite3".to_owned(),
-            graph: "graph/current.grafeo".to_owned(),
-        }
-    }
-
-    fn is_expected(&self) -> bool {
-        self.format == CONFIG_FORMAT
-            && self.database == "commonplace.sqlite3"
-            && self.graph == "graph/current.grafeo"
-    }
-}
-
 pub fn initialize(requested_root: &Path) -> Result<InitResult> {
     let root = absolute_path(requested_root)?;
     let database_path = root.join("commonplace.sqlite3");
-    let graph_path = root.join("graph/current.grafeo");
-    let config_path = root.join("config.json");
 
     if root.exists() {
         if !root.is_dir() {
@@ -54,20 +27,8 @@ pub fn initialize(requested_root: &Path) -> Result<InitResult> {
             )));
         }
 
-        let config = read_config(&config_path)?;
-        if !config.is_expected() {
-            return Err(CommonplaceError::Conflict(format!(
-                "unsupported configuration in {}",
-                config_path.display()
-            )));
-        }
+        StoreConfig::validate(&root)?;
         SqliteDatabase::validate(&database_path)?;
-        if !graph_path.exists() {
-            return Err(CommonplaceError::Conflict(format!(
-                "initialized store is missing its graph: {}",
-                graph_path.display()
-            )));
-        }
 
         return Ok(InitResult {
             path: root,
@@ -124,21 +85,6 @@ fn absolute_path(path: &Path) -> Result<PathBuf> {
     } else {
         Ok(std::env::current_dir()?.join(path))
     }
-}
-
-fn read_config(path: &Path) -> Result<StoreConfig> {
-    let bytes = std::fs::read(path).map_err(|error| {
-        CommonplaceError::Conflict(format!(
-            "knowledge-base configuration is unavailable at {}: {error}",
-            path.display()
-        ))
-    })?;
-    serde_json::from_slice(&bytes).map_err(|error| {
-        CommonplaceError::Conflict(format!(
-            "knowledge-base configuration is invalid at {}: {error}",
-            path.display()
-        ))
-    })
 }
 
 #[cfg(test)]

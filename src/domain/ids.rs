@@ -30,6 +30,15 @@ macro_rules! tagged_id {
             }
         }
 
+        impl serde::Serialize for $name {
+            fn serialize<S: serde::Serializer>(
+                &self,
+                serializer: S,
+            ) -> std::result::Result<S::Ok, S::Error> {
+                serializer.collect_str(self)
+            }
+        }
+
         impl FromStr for $name {
             type Err = CommonplaceError;
 
@@ -57,6 +66,7 @@ tagged_id!(RevisionId, "revision");
 tagged_id!(PassageId, "passage");
 tagged_id!(EntityId, "entity");
 tagged_id!(EntityTypeId, "entity-type");
+tagged_id!(IdentifierSchemeId, "identifier-scheme");
 tagged_id!(PredicateId, "predicate");
 tagged_id!(KnowledgeItemId, "knowledge");
 
