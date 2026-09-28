@@ -5,6 +5,8 @@ pub type Result<T> = std::result::Result<T, CommonplaceError>;
 #[derive(Debug, Error)]
 pub enum CommonplaceError {
     #[error("{0}")]
+    Configuration(String),
+    #[error("{0}")]
     InvalidInput(String),
     #[error("{0}")]
     NotFound(String),
@@ -29,6 +31,7 @@ pub enum CommonplaceError {
 impl CommonplaceError {
     pub const fn code(&self) -> &'static str {
         match self {
+            Self::Configuration(_) => "configuration_error",
             Self::InvalidInput(_) => "invalid_input",
             Self::NotFound(_) => "not_found",
             Self::ModelUnavailable(_) => "model_unavailable",
@@ -42,7 +45,10 @@ impl CommonplaceError {
 
     pub const fn exit_code(&self) -> u8 {
         match self {
-            Self::InvalidInput(_) | Self::LimitExceeded(_) | Self::NotFound(_) => 2,
+            Self::Configuration(_)
+            | Self::InvalidInput(_)
+            | Self::LimitExceeded(_)
+            | Self::NotFound(_) => 2,
             Self::Conflict(_) => 3,
             Self::Storage(_)
             | Self::Graph(_)

@@ -69,6 +69,15 @@ pub fn with_stdin(mut command: Command, bytes: &[u8]) -> Output {
     })
 }
 
+pub fn isolated_command(binary: impl AsRef<std::ffi::OsStr>, home: &std::path::Path) -> Command {
+    let mut command = Command::new(binary);
+    command
+        .env("HOME", home)
+        .env("XDG_CONFIG_HOME", home.join("config"))
+        .env("APPDATA", home.join("appdata"));
+    command
+}
+
 impl Store {
     pub fn new() -> Self {
         let directory = tempfile::tempdir().expect("temporary directory");
@@ -79,9 +88,27 @@ impl Store {
     }
 
     pub fn command(&self) -> Command {
-        let mut command = Command::new(binary());
+        let mut command = self.command_without_store();
         command.arg("--store").arg(&self.root);
         command
+    }
+
+    pub fn command_without_store(&self) -> Command {
+        isolated_command(binary(), self.directory.path())
+    }
+
+    pub fn user_config_path(&self) -> PathBuf {
+        if cfg!(target_os = "macos") {
+            self.directory
+                .path()
+                .join("Library/Application Support/commonplace/config.json")
+        } else if cfg!(windows) {
+            self.directory
+                .path()
+                .join("appdata/commonplace/config.json")
+        } else {
+            self.directory.path().join("config/commonplace/config.json")
+        }
     }
 
     pub fn run(&self, arguments: &[&str]) -> Output {

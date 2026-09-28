@@ -709,6 +709,7 @@ Primary commands are:
 
 ```text
 commonplace init
+commonplace config show
 commonplace ingest
 commonplace remove
 commonplace search
@@ -727,6 +728,36 @@ configuration for one knowledge base. It does not create model profiles,
 approval state, cache profiles, or a separate model-preparation workflow.
 Pinned models load on first use and may be obtained through the selected
 runtime's standard cache mechanism.
+
+Commonplace may read one optional user configuration file containing only
+non-secret default paths for the knowledge base and strict offline model cache.
+It is not the store-local backend configuration created by `init`. The effective
+knowledge-base path is selected by `--store`, then `COMMONPLACE_STORE`, then the
+user file, then `.commonplace`. The effective strict model-cache path is selected
+by `--model-cache`, then `COMMONPLACE_MODEL_CACHE`, then the user file; without
+one, the selected runtime's existing stock cache/acquisition behavior remains.
+
+`commonplace config show` returns the discovered file status and each effective
+value and source without opening a store, loading models, checking path health,
+downloading artifacts, or writing configuration. A discovered malformed,
+unreadable, unknown-field, relative-path, or unsupported-version file fails
+every executing command explicitly. Standard `--help` and `--version` remain
+available before configuration loading. Explicit overrides do not hide a broken
+discovered file.
+
+The `config.show` result contains `config_file.path` (null when platform
+discovery is unavailable), `config_file.status` (`unavailable`, `absent`, or
+`loaded`), and `store`/`model_cache` objects with `path` and `source`.
+Value sources are `command_line`, `environment`, `user_config`, `default`, or
+`runtime_default`; the last is used only for a null model-cache override, where
+the existing model runtime selects its stock cache.
+
+The user file is optional and has one standard platform location; there is no
+`--config` location override, named profile, configuration writer, or implicit
+store/model preparation. A selected missing store is created only by explicit
+`init`; other commands retain their existing failure. A selected model cache is
+strictly offline and never falls back or downloads when files are missing or
+corrupt.
 
 `commonplace get ID` is the only direct authoritative read command. It accepts tagged
 document, revision, passage, entity, and knowledge-item IDs. Document results
@@ -825,6 +856,8 @@ Commonplace does not include:
 - automatic semantic deduplication;
 - source deletion inferred from synchronization;
 - multiple selectable model profiles;
+- configuration profiles, credentials, or executable-path settings;
+- configuration migration or implicit configuration writes;
 - background workers or job recovery;
 - incremental graph projection;
 - historical or withdrawn knowledge in Oxigraph;

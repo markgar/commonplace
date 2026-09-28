@@ -533,7 +533,51 @@ documentation and record exact artifacts, component/model revisions, target
 results, and any remaining blockers. Missing target evidence blocks release,
 not completion of an otherwise accepted feature packet.
 
-### 3.14 Packet delivery and integration rules
+### 3.14 Optional persistent user defaults
+
+**Issue:** [#43](https://github.com/markgar/commonplace/issues/43)
+
+**Dependency:** merged local packaging PR #40 at
+`187e5b28576698877b611323429e32949742757f`.
+
+**Outcome:** an installed executable can discover one persistent store and
+strict pinned-model cache without repeating absolute paths, while explicit
+automation remains deterministic.
+
+**Work:** specify and implement `commonplace-user-config/1` as a read-only,
+optional, standard-location file with independently optional absolute `store`
+and `model_cache` fields. Keep it strictly separate from store-local
+`commonplace-config/2`. Resolve store by `--store`, `COMMONPLACE_STORE`, user
+file, then `.commonplace`; resolve strict model cache by `--model-cache`,
+`COMMONPLACE_MODEL_CACHE`, user file, then the existing stock runtime behavior.
+Add read-only JSON `config show` with value-source reporting. Existing malformed
+files fail executing commands with `configuration_error`; help/version remain
+parser-only.
+
+Do not add `--config`, configuration writes, profiles, credentials, executable
+paths, migrations, downloads, daemons, alternate providers/backends, or eager
+path health checks. Resolution alone never creates, opens, repairs, or mutates a
+store or model cache. Only explicit `init` may create the selected store, and
+strict model failures never fall back.
+
+**Primary surfaces:** product/architecture/persistence contracts, a typed
+configuration resolver at the composition root, CLI options/output/errors,
+ingestion/search model construction, public-binary test isolation, README/local
+packaging guidance, and generated `USAGE.txt`.
+
+**Acceptance:** focused tests cover absent discovery/file, valid independent and
+combined fields, malformed/unknown/duplicate/version-incompatible input,
+relative configured paths, unreadable files where portable, CLI and environment
+precedence, fallback behavior, `config show`, missing/incompatible stores,
+missing strict model caches, and help with a bad file. Synthetic platform inputs
+verify macOS, XDG/fallback Unix, and Windows path logic without claiming native
+execution. Public-binary tests isolate `HOME`, `XDG_CONFIG_HOME`, and `APPDATA`
+so a developer's real file cannot affect ordinary or real-model assertions.
+Existing explicit store/model tests remain unchanged in meaning. Packaging and
+documentation point to persistent user/store locations without modifying a
+real home during package construction or validation.
+
+### 3.15 Packet delivery and integration rules
 
 - Use one accountable owner per packet. Start with two implementation lanes;
   assign additional agents only bounded independent work with a concrete
@@ -569,7 +613,7 @@ not completion of an otherwise accepted feature packet.
 - Implementation, PR creation, merge, and release are separate actions. This
   document does not authorize automatic merging or publication.
 
-### 3.15 Progress tracking
+### 3.16 Progress tracking
 
 The packet issue's `Progress` table is the live record: state, owner/session,
 dependencies, blocker, PR, evidence, next action, and update date. Use

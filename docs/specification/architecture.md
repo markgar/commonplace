@@ -53,6 +53,7 @@ instances.
 ```text
 src/
   main.rs
+  config.rs
   cli/
     mod.rs
     input.rs
@@ -509,6 +510,7 @@ knowledge-item ID to the corresponding indexed SQLite read.
 
 Errors are typed by responsibility:
 
+- `configuration_error`;
 - `invalid_input`;
 - `not_found`;
 - `ambiguous`;
@@ -531,7 +533,7 @@ fallbacks.
 
 Configuration is intentionally small:
 
-- knowledge-base path;
+- optional user defaults for the knowledge-base and strict model-cache paths;
 - source, batch, and result limits;
 - maximum passages per document;
 - passage target size;
@@ -543,6 +545,37 @@ Configuration is intentionally small:
 
 Values that define stored representation are part of the store format and cannot
 change while opening an existing store.
+
+The composition root resolves invocation configuration once after CLI parsing
+and before dispatch. It discovers the optional user file at
+`$HOME/Library/Application Support/commonplace/config.json` on macOS,
+`$XDG_CONFIG_HOME/commonplace/config.json` when that Linux/Unix variable is
+absolute (otherwise `$HOME/.config/commonplace/config.json`), and
+`%APPDATA%\commonplace\config.json` on Windows. If no platform base can be
+discovered, the file is absent. A missing file is also absent; any other read or
+decode failure is `configuration_error`.
+
+The resolver strictly decodes `commonplace-user-config/1`, rejects unknown or
+duplicate fields and relative stored paths, and records each selected value's
+source. Store precedence is `--store`, `COMMONPLACE_STORE`, user configuration,
+then `.commonplace`. Strict model-cache precedence is `--model-cache`,
+`COMMONPLACE_MODEL_CACHE`, user configuration, then no override. CLI and
+environment paths retain invocation-local path semantics; durable user defaults
+are absolute so their meaning does not depend on the working directory.
+
+Every executing command loads an existing user file even when higher-precedence
+values cover both paths, so invalid durable state is never silently hidden.
+Clap handles help/version before resolution. The resolved store is passed to all
+store consumers, and the resolved optional model-cache path is passed to both
+embedding and reranking providers; command branches do not reread these
+environment variables independently.
+
+`config show` serializes discovery status plus effective values and sources. It
+does not open or validate the selected paths. Existing store initialization,
+compatibility checks, and strict model artifact verification remain the only
+consumers that act on them. The resolver never writes a file, creates a store,
+loads a model, downloads an artifact, repairs state, or selects a fallback after
+a chosen path fails.
 
 ## 12. Testing strategy
 

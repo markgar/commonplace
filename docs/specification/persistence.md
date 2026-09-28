@@ -609,6 +609,37 @@ until a replacement is verified, then uses the activation/restore sequence in
 Rebuild also works when no current directory exists. Cleanup and restoration
 failures are reported explicitly; they are not successful repairs.
 
+### 13.4 User defaults are not store configuration
+
+The optional user-level default file is a separate durable public format:
+
+```json
+{
+  "format": "commonplace-user-config/1",
+  "store": "/absolute/path/to/persistent/store",
+  "model_cache": "/absolute/path/to/installed/pinned-models"
+}
+```
+
+`format` is required. `store` and `model_cache` are independently optional
+UTF-8 strings and, when present, must be absolute paths on the executing
+platform. Unknown and duplicate fields, malformed JSON, unsupported formats,
+and relative paths invalidate the complete file. The application does not
+rewrite, migrate, repair, or preserve unknown data in this format.
+
+This file is discovered outside every knowledge base and contains no
+authoritative source, knowledge, graph, credential, profile, or provider state.
+It must never be confused with `<store>/config.json`, whose fixed
+`commonplace-config/2` contents describe the backend layout and are created and
+validated only with that store. Selecting a user default does not initialize,
+open, validate, migrate, or mutate the referenced store or model cache.
+
+Commonplace is read-only with respect to `commonplace-user-config/1` in this
+release, so it has no application write or atomic-replacement protocol. Package
+and user instructions may show deliberate creation or replacement by the user,
+but installation and runtime commands do not modify the real user home
+implicitly.
+
 ## 14. Time and serialization
 
 Operational timestamps are UTC RFC 3339 text. The workflow obtains one

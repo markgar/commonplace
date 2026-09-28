@@ -19,6 +19,7 @@ pub struct CommandResponse {
 #[derive(Debug, Serialize)]
 #[serde(untagged)]
 pub enum CommandResult {
+    Config(crate::config::ConfigReport),
     GraphQuery(crate::graph::SelectResult),
     GraphSchema(crate::graph::schema::GraphSchema),
     GraphRebuild(crate::app::graph::RebuildResult),

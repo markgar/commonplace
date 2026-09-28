@@ -19,8 +19,13 @@ use self::output::{CommandResponse, CommandResult, ErrorResponse};
 #[derive(Debug, Parser)]
 #[command(name = "commonplace", version, about)]
 struct Cli {
-    #[arg(long, global = true, default_value = ".commonplace")]
-    store: PathBuf,
+    /// Knowledge-base path; overrides COMMONPLACE_STORE and user configuration.
+    #[arg(long, global = true)]
+    store: Option<PathBuf>,
+
+    /// Strict offline pinned-model cache; overrides COMMONPLACE_MODEL_CACHE and user configuration.
+    #[arg(long, global = true)]
+    model_cache: Option<PathBuf>,
 
     /// Emit JSON (also the default).
     #[arg(long, global = true)]
@@ -32,6 +37,11 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Inspect effective path configuration without opening the store or loading models.
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
     /// Create or validate a knowledge base.
     Init,
     /// Inspect, query, or explicitly rebuild the derived RDF graph.
@@ -68,6 +78,12 @@ enum Command {
         #[command(subcommand)]
         command: SchemaCommand,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum ConfigCommand {
+    /// Show discovered configuration and effective values with their sources.
+    Show,
 }
 
 #[derive(Debug, Subcommand)]
@@ -177,7 +193,22 @@ fn write_committed_response(response: &CommandResponse, output: &mut impl Write)
 }
 
 fn execute(cli: Cli) -> Result<CommandResponse> {
-    match cli.command {
+    let config = crate::config::resolve(cli.store, cli.model_cache)?;
+    execute_command(cli.command, config)
+}
+
+fn execute_command(
+    command: Command,
+    config: crate::config::ResolvedConfig,
+) -> Result<CommandResponse> {
+    match command {
+        Command::Config {
+            command: ConfigCommand::Show,
+        } => Ok(CommandResponse::new(
+            "config.show",
+            "complete",
+            CommandResult::Config(config.report),
+        )),
         Command::Graph { command } => match command {
             GraphCommand::Schema => Ok(CommandResponse::new(
                 "graph.schema",
@@ -192,7 +223,7 @@ fn execute(cli: Cli) -> Result<CommandResponse> {
                 "graph.query",
                 "complete",
                 CommandResult::GraphQuery(graph::query(
-                    &cli.store,
+                    &config.store,
                     &query,
                     crate::graph::QueryConfig {
                         row_limit,
@@ -203,25 +234,26 @@ fn execute(cli: Cli) -> Result<CommandResponse> {
             GraphCommand::Rebuild => Ok(CommandResponse::new(
                 "graph.rebuild",
                 "complete",
-                CommandResult::GraphRebuild(graph::rebuild(&cli.store)?),
+                CommandResult::GraphRebuild(graph::rebuild(&config.store)?),
             )),
         },
-        Command::Ingest(args) => ingest::execute(&cli.store, *args),
+        Command::Ingest(args) => ingest::execute(&config.store, config.model_cache, *args),
         Command::Search {
             query,
             since,
             source_types,
             limit,
         } => {
-            let cache = std::env::var_os("COMMONPLACE_MODEL_CACHE").map(PathBuf::from);
-            let mut embedding =
-                crate::providers::embeddings::LocalEmbeddingModel::new(cache.clone(), 1);
-            let mut reranker = crate::providers::reranker::LocalReranker::new(cache);
+            let mut embedding = crate::providers::embeddings::LocalEmbeddingModel::new(
+                config.model_cache.clone(),
+                1,
+            );
+            let mut reranker = crate::providers::reranker::LocalReranker::new(config.model_cache);
             Ok(CommandResponse::new(
                 "search",
                 "complete",
                 CommandResult::Search(crate::app::search::search(
-                    &cli.store,
+                    &config.store,
                     &crate::domain::search::SearchRequest {
                         query,
                         since,
@@ -233,16 +265,16 @@ fn execute(cli: Cli) -> Result<CommandResponse> {
                 )?),
             ))
         }
-        Command::Record(args) => record::execute(&cli.store, args),
-        Command::Remove(args) => remove::execute(&cli.store, args),
-        Command::Withdraw(args) => withdraw::execute(&cli.store, args),
+        Command::Record(args) => record::execute(&config.store, args),
+        Command::Remove(args) => remove::execute(&config.store, args),
+        Command::Withdraw(args) => withdraw::execute(&config.store, args),
         Command::Get { id } => Ok(CommandResponse::new(
             "get",
             "complete",
-            CommandResult::Get(get::get(&cli.store, &id)?),
+            CommandResult::Get(get::get(&config.store, &id)?),
         )),
         Command::Init => {
-            let result = init::initialize(&cli.store)?;
+            let result = init::initialize(&config.store)?;
             Ok(CommandResponse::init(result))
         }
         Command::Schema {
@@ -250,7 +282,7 @@ fn execute(cli: Cli) -> Result<CommandResponse> {
         } => Ok(CommandResponse::new(
             "schema.show",
             "complete",
-            CommandResult::Vocabulary(schema::show(&cli.store)?),
+            CommandResult::Vocabulary(schema::show(&config.store)?),
         )),
         Command::Schema {
             command:
@@ -270,9 +302,9 @@ fn execute(cli: Cli) -> Result<CommandResponse> {
             let file = file.ok_or_else(|| {
                 crate::CommonplaceError::InvalidInput("schema file is required".into())
             })?;
-            let config = schema::OperationConfig::default();
-            let input = input::read(&file, config.maximum_input_bytes)?;
-            let result = schema::apply(&cli.store, input, check, &config)?;
+            let operation_config = schema::OperationConfig::default();
+            let input = input::read(&file, operation_config.maximum_input_bytes)?;
+            let result = schema::apply(&config.store, input, check, &operation_config)?;
             let status = if check {
                 "checked"
             } else if result.changed {
@@ -292,6 +324,9 @@ fn execute(cli: Cli) -> Result<CommandResponse> {
 impl Command {
     const fn operation(&self) -> &'static str {
         match self {
+            Self::Config {
+                command: ConfigCommand::Show,
+            } => "config.show",
             Self::Graph {
                 command: GraphCommand::Schema,
             } => "graph.schema",
@@ -328,7 +363,31 @@ mod tests {
     use clap::Parser;
 
     use super::Cli;
-    use super::execute;
+    use super::execute_command;
+
+    fn execute(cli: Cli) -> crate::Result<super::CommandResponse> {
+        let store = cli.store.unwrap_or_else(|| ".commonplace".into());
+        let model_cache = cli.model_cache;
+        let config = crate::config::ResolvedConfig {
+            store: store.clone(),
+            model_cache: model_cache.clone(),
+            report: crate::config::ConfigReport {
+                config_file: crate::config::ConfigFileReport {
+                    path: None,
+                    status: crate::config::ConfigStatus::Unavailable,
+                },
+                store: crate::config::PathReport {
+                    path: store,
+                    source: crate::config::ValueSource::CommandLine,
+                },
+                model_cache: crate::config::OptionalPathReport {
+                    path: model_cache,
+                    source: crate::config::ValueSource::CommandLine,
+                },
+            },
+        };
+        execute_command(cli.command, config)
+    }
 
     #[test]
     fn record_output_write_and_flush_failures_report_committed_ids() {
@@ -454,6 +513,10 @@ mod tests {
             (
                 vec!["commonplace", "graph", "schema", "--help"],
                 "not your vocabulary",
+            ),
+            (
+                vec!["commonplace", "config", "show", "--help"],
+                "effective values with their sources",
             ),
             (
                 vec!["commonplace", "ingest", "--help"],
