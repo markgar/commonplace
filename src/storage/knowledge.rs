@@ -4,10 +4,14 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::domain::documents::Evidence;
 use crate::domain::evidence::SupportInput;
-use crate::domain::ids::{EntityId, EntityTypeId, IdentifierSchemeId, KnowledgeItemId, PassageId};
-use crate::domain::knowledge::{
-    Alias, Entity, EntityIdentifier, EntityReference, Identifier, IdentityText, Knowledge,
+use crate::domain::ids::{
+    EntityId, EntityTypeId, IdentifierSchemeId, KnowledgeItemId, PassageId, PredicateId,
 };
+use crate::domain::knowledge::{
+    Alias, CanonicalLiteral, Entity, EntityIdentifier, EntityReference, FactObject,
+    FactObjectInput, Identifier, IdentityText, Knowledge, KnowledgeDetail,
+};
+use crate::domain::schema::ObjectKind;
 use crate::{CommonplaceError, Result};
 
 use super::{database::storage_error, evidence};
@@ -223,6 +227,35 @@ pub fn membership(
         .ok_or_else(|| {
             CommonplaceError::InvalidInput(format!("unknown entity type {entity_type:?}"))
         })?;
+    let hydrated = hydrate_support(db, support)?;
+    db.execute(
+        "INSERT INTO knowledge_items(kind,schema_version,created_at,created_by)
+         VALUES ('type_membership',?1,?2,?3)",
+        params![schema_version, timestamp, created_by],
+    )
+    .map_err(storage_error)?;
+    let id = KnowledgeItemId::new(db.last_insert_rowid())?;
+    db.execute(
+        "INSERT INTO entity_type_memberships(knowledge_item_id,entity_id,entity_type_id) VALUES (?1,?2,?3)",
+        params![id.value(), entity.value(), type_id],
+    ).map_err(storage_error)?;
+    attach_support(db, id, &hydrated)?;
+    Ok(Knowledge {
+        knowledge_id: id,
+        schema_version,
+        created_at: timestamp.into(),
+        created_by: created_by.map(str::to_owned),
+        withdrawn_at: None,
+        withdrawn_by: None,
+        detail: KnowledgeDetail::TypeMembership {
+            entity_id: entity,
+            entity_type_id: EntityTypeId::new(type_id)?,
+        },
+        support: hydrated,
+    })
+}
+
+fn hydrate_support(db: &Connection, support: &[SupportInput]) -> Result<Vec<Evidence>> {
     let mut seen = BTreeSet::new();
     let mut hydrated = Vec::with_capacity(support.len());
     for assertion in support {
@@ -237,36 +270,206 @@ pub fn membership(
         hydrated.push(passage);
     }
     hydrated.sort_by_key(|passage| passage.passage_id);
-    db.execute(
-        "INSERT INTO knowledge_items(kind,schema_version,created_at,created_by)
-         VALUES ('type_membership',?1,?2,?3)",
-        params![schema_version, timestamp, created_by],
-    )
-    .map_err(storage_error)?;
-    let id = KnowledgeItemId::new(db.last_insert_rowid())?;
-    db.execute(
-        "INSERT INTO entity_type_memberships(knowledge_item_id,entity_id,entity_type_id) VALUES (?1,?2,?3)",
-        params![id.value(), entity.value(), type_id],
-    ).map_err(storage_error)?;
-    for passage in &hydrated {
+    Ok(hydrated)
+}
+
+fn attach_support(db: &Connection, id: KnowledgeItemId, support: &[Evidence]) -> Result<()> {
+    for passage in support {
         db.execute(
             "INSERT INTO knowledge_item_evidence(knowledge_item_id,passage_id) VALUES (?1,?2)",
             params![id.value(), passage.passage_id.value()],
         )
         .map_err(storage_error)?;
     }
+    Ok(())
+}
+
+pub struct FactWrite<'a> {
+    pub subject: EntityId,
+    pub predicate: &'a str,
+    pub object: &'a FactObjectInput,
+    pub support: &'a [SupportInput],
+    pub timestamp: &'a str,
+    pub created_by: Option<&'a str>,
+    pub schema_version: i64,
+}
+
+pub fn fact(
+    db: &Connection,
+    input: FactWrite<'_>,
+    refs: &BTreeMap<String, EntityId>,
+) -> Result<Knowledge> {
+    let (predicate_id, kind) = db
+        .query_row(
+            "SELECT predicate_id, object_kind FROM predicates WHERE name=?1",
+            [input.predicate],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(storage_error)?
+        .ok_or_else(|| {
+            CommonplaceError::InvalidInput(format!("unknown predicate {:?}", input.predicate))
+        })?;
+    let kind = object_kind(&kind)?;
+    let object = match (kind, input.object) {
+        (ObjectKind::Entity, FactObjectInput::Entity { entity }) => FactObject::Entity {
+            entity_id: resolve(db, entity, refs)?,
+        },
+        (ObjectKind::Entity, _) | (_, FactObjectInput::Entity { .. }) => {
+            return Err(CommonplaceError::InvalidInput(format!(
+                "object must match predicate kind {}",
+                kind.as_str()
+            )));
+        }
+        (_, FactObjectInput::Literal { literal }) => {
+            FactObject::Literal(CanonicalLiteral::new(kind, literal)?)
+        }
+    };
+    let hydrated = hydrate_support(db, input.support)?;
+    db.execute(
+        "INSERT INTO knowledge_items(kind,schema_version,created_at,created_by) VALUES ('fact',?1,?2,?3)",
+        params![input.schema_version, input.timestamp, input.created_by],
+    ).map_err(storage_error)?;
+    let id = KnowledgeItemId::new(db.last_insert_rowid())?;
+    let (entity, literal) = match &object {
+        FactObject::Entity { entity_id } => (Some(entity_id.value()), None),
+        FactObject::Literal(value) => (None, Some(value.literal_json.as_str())),
+    };
+    db.execute(
+        "INSERT INTO facts(knowledge_item_id,subject_entity_id,predicate_id,object_entity_id,literal_json)
+         VALUES (?1,?2,?3,?4,?5)",
+        params![id.value(), input.subject.value(), predicate_id, entity, literal],
+    ).map_err(storage_error)?;
+    attach_support(db, id, &hydrated)?;
     Ok(Knowledge {
         knowledge_id: id,
-        subtype: "type_membership",
-        schema_version,
-        created_at: timestamp.into(),
-        created_by: created_by.map(str::to_owned),
+        schema_version: input.schema_version,
+        created_at: input.timestamp.into(),
+        created_by: input.created_by.map(str::to_owned),
         withdrawn_at: None,
         withdrawn_by: None,
-        entity_id: entity,
-        entity_type_id: EntityTypeId::new(type_id)?,
+        detail: KnowledgeDetail::Fact {
+            subject_entity_id: input.subject,
+            predicate_id: PredicateId::new(predicate_id)?,
+            object,
+        },
         support: hydrated,
     })
+}
+
+pub(crate) fn object_kind(kind: &str) -> Result<ObjectKind> {
+    match kind {
+        "entity" => Ok(ObjectKind::Entity),
+        "string" => Ok(ObjectKind::String),
+        "integer" => Ok(ObjectKind::Integer),
+        "boolean" => Ok(ObjectKind::Boolean),
+        "timestamp" => Ok(ObjectKind::Timestamp),
+        _ => Err(CommonplaceError::Storage(format!(
+            "invalid stored predicate kind {kind:?}"
+        ))),
+    }
+}
+
+pub(crate) fn stored_object(
+    kind: &str,
+    entity: Option<i64>,
+    literal: Option<&str>,
+) -> Result<FactObject> {
+    match (object_kind(kind)?, entity, literal) {
+        (ObjectKind::Entity, Some(id), None) => Ok(FactObject::Entity {
+            entity_id: EntityId::new(id)?,
+        }),
+        (kind, None, Some(json)) if kind != ObjectKind::Entity => {
+            Ok(FactObject::Literal(CanonicalLiteral::stored(kind, json)?))
+        }
+        _ => Err(CommonplaceError::Storage(
+            "stored fact object does not match its predicate kind".into(),
+        )),
+    }
+}
+
+pub(crate) fn invalid_active_endpoint(db: &Connection) -> Result<Option<KnowledgeItemId>> {
+    invalid_endpoint_excluding(db, &[])
+}
+
+fn invalid_endpoint_excluding(
+    db: &Connection,
+    excluded: &[KnowledgeItemId],
+) -> Result<Option<KnowledgeItemId>> {
+    let excluded =
+        serde_json::to_string(&excluded.iter().map(|id| id.value()).collect::<Vec<_>>())?;
+    db.query_row(
+        "WITH excluded AS (SELECT value AS id FROM json_each(?1))
+         SELECT f.knowledge_item_id FROM facts f
+         JOIN knowledge_items k USING(knowledge_item_id)
+         JOIN predicates p USING(predicate_id)
+         WHERE k.withdrawn_at IS NULL
+           AND k.knowledge_item_id NOT IN (SELECT id FROM excluded) AND (
+           NOT EXISTS (
+             SELECT 1 FROM entity_type_memberships m
+             JOIN knowledge_items mk USING(knowledge_item_id)
+             JOIN predicate_entity_types e USING(entity_type_id)
+             WHERE m.entity_id=f.subject_entity_id AND mk.withdrawn_at IS NULL
+               AND mk.knowledge_item_id NOT IN (SELECT id FROM excluded)
+               AND e.predicate_id=f.predicate_id AND e.role='subject')
+           OR (p.object_kind='entity' AND NOT EXISTS (
+             SELECT 1 FROM entity_type_memberships m
+             JOIN knowledge_items mk USING(knowledge_item_id)
+             JOIN predicate_entity_types e USING(entity_type_id)
+             WHERE m.entity_id=f.object_entity_id AND mk.withdrawn_at IS NULL
+               AND mk.knowledge_item_id NOT IN (SELECT id FROM excluded)
+               AND e.predicate_id=f.predicate_id AND e.role='object')))
+         ORDER BY f.knowledge_item_id LIMIT 1",
+        [excluded],
+        |row| row.get::<_, i64>(0),
+    )
+    .optional()
+    .map_err(storage_error)?
+    .map(KnowledgeItemId::new)
+    .transpose()
+}
+
+pub(crate) fn withdraw(
+    db: &Connection,
+    ids: &[KnowledgeItemId],
+    timestamp: &str,
+    withdrawn_by: Option<&str>,
+) -> Result<Vec<Knowledge>> {
+    let mut items = ids
+        .iter()
+        .enumerate()
+        .map(|(index, id)| {
+            let item = knowledge(db, *id).map_err(|error| {
+                let message = format!("knowledge_ids[{index}] ({id}): {error}");
+                match error {
+                    CommonplaceError::NotFound(_) => CommonplaceError::NotFound(message),
+                    _ => CommonplaceError::Storage(message),
+                }
+            })?;
+            if item.withdrawn_at.is_some() {
+                return Err(CommonplaceError::InvalidInput(format!(
+                    "knowledge_ids[{index}]: {id} is already withdrawn; inspect it with get"
+                )));
+            }
+            Ok(item)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if let Some(id) = invalid_endpoint_excluding(db, ids)? {
+        return Err(CommonplaceError::InvalidInput(format!(
+            "{id} would have no permitted active type on a required predicate endpoint; \
+             retain a permitted type or include this dependent fact in knowledge_ids"
+        )));
+    }
+    for item in &mut items {
+        db.execute(
+            "UPDATE knowledge_items SET withdrawn_at=?1,withdrawn_by=?2 WHERE knowledge_item_id=?3",
+            params![timestamp, withdrawn_by, item.knowledge_id.value()],
+        )
+        .map_err(storage_error)?;
+        item.withdrawn_at = Some(timestamp.into());
+        item.withdrawn_by = withdrawn_by.map(str::to_owned);
+    }
+    Ok(items)
 }
 
 pub fn entity(db: &Connection, id: EntityId) -> Result<Entity> {
@@ -377,24 +580,37 @@ pub fn knowledge(db: &Connection, id: KnowledgeItemId) -> Result<Knowledge> {
             "{id} has invalid subtype cardinality or kind"
         )));
     }
-    let (Some(entity), Some(entity_type)) = (entity, entity_type) else {
-        return Err(CommonplaceError::InvalidInput(
-            "fact reads are not supported by this release".into(),
-        ));
+    let detail = match (entity, entity_type) {
+        (Some(entity), Some(entity_type)) => KnowledgeDetail::TypeMembership {
+            entity_id: EntityId::new(entity)?,
+            entity_type_id: EntityTypeId::new(entity_type)?,
+        },
+        _ => {
+            let (subject, predicate, kind, entity, literal) = db.query_row(
+                "SELECT subject_entity_id,predicate_id,object_kind,object_entity_id,literal_json
+                 FROM facts JOIN predicates USING(predicate_id) WHERE knowledge_item_id=?1",
+                [id.value()],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, String>(2)?,
+                    row.get::<_, Option<i64>>(3)?, row.get::<_, Option<String>>(4)?)),
+            ).map_err(storage_error)?;
+            KnowledgeDetail::Fact {
+                subject_entity_id: EntityId::new(subject)?,
+                predicate_id: PredicateId::new(predicate)?,
+                object: stored_object(&kind, entity, literal.as_deref())?,
+            }
+        }
     };
     let support: Vec<Evidence> = ids(db,
         "SELECT passage_id FROM knowledge_item_evidence WHERE knowledge_item_id=?1 ORDER BY passage_id",
         id.value())?.into_iter().map(|passage| evidence::passage(db, PassageId::new(passage)?)).collect::<Result<_>>()?;
     Ok(Knowledge {
         knowledge_id: id,
-        subtype: "type_membership",
         schema_version,
         created_at,
         created_by,
         withdrawn_at,
         withdrawn_by,
-        entity_id: EntityId::new(entity)?,
-        entity_type_id: EntityTypeId::new(entity_type)?,
+        detail,
         support,
     })
 }

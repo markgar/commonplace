@@ -6,13 +6,15 @@ use serde::Serialize;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::domain::documents::Evidence;
-use crate::domain::ids::{EntityId, EntityTypeId, KnowledgeItemId};
-use crate::domain::knowledge::{RecordInput, RecordItem};
+use crate::domain::ids::{EntityId, EntityTypeId, KnowledgeItemId, PredicateId};
+use crate::domain::knowledge::{FactObject, KnowledgeDetail, RecordInput, RecordItem};
 use crate::storage::{
     database::{SqliteDatabase, storage_error},
     graph_snapshot, knowledge,
 };
 use crate::{CommonplaceError, Result};
+
+pub(crate) const RECOVERY_GUIDANCE: &str = "Do not retry record; inspect these IDs with get.";
 
 #[derive(Debug, Default, Serialize)]
 pub struct Summary {
@@ -20,6 +22,7 @@ pub struct Summary {
     pub entities_created: usize,
     pub metadata_changed: usize,
     pub memberships_created: usize,
+    pub facts_created: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -43,6 +46,14 @@ pub enum ItemResult {
         knowledge_id: KnowledgeItemId,
         support: Vec<Evidence>,
     },
+    Fact {
+        index: usize,
+        subject_entity_id: EntityId,
+        predicate_id: PredicateId,
+        knowledge_id: KnowledgeItemId,
+        object: FactObject,
+        support: Vec<Evidence>,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -58,11 +69,11 @@ pub struct RecordResult {
 pub fn record(root: &Path, input: RecordInput, timeout: Duration) -> Result<RecordResult> {
     input.validate()?;
     let mut writer = SqliteDatabase::write(root, timeout)?;
+    let timestamp = OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .map_err(|error| CommonplaceError::Storage(error.to_string()))?;
     let transaction = writer.transaction()?;
     let operation = (|| {
-        let timestamp = OffsetDateTime::now_utc()
-            .format(&Rfc3339)
-            .map_err(|error| CommonplaceError::Storage(error.to_string()))?;
         let schema_version: i64 = transaction
             .query_row(
                 "SELECT schema_version FROM store_state WHERE singleton=1",
@@ -168,11 +179,56 @@ pub fn record(root: &Path, input: RecordInput, timeout: Duration) -> Result<Reco
                         schema_version,
                     )?;
                     result.summary.memberships_created += 1;
+                    let KnowledgeDetail::TypeMembership { entity_type_id, .. } = item.detail else {
+                        return Err(CommonplaceError::Storage(
+                            "membership returned a fact".into(),
+                        ));
+                    };
                     Ok(ItemResult::TypeMembership {
                         index,
                         entity_id,
-                        entity_type_id: item.entity_type_id,
+                        entity_type_id,
                         knowledge_id: item.knowledge_id,
+                        support: item.support,
+                    })
+                }
+                RecordItem::Fact {
+                    subject,
+                    predicate,
+                    object,
+                    support,
+                } => {
+                    let subject = knowledge::resolve(&transaction, subject, &refs)?;
+                    let item = knowledge::fact(
+                        &transaction,
+                        knowledge::FactWrite {
+                            subject,
+                            predicate: &predicate.0,
+                            object,
+                            support,
+                            timestamp: &timestamp,
+                            created_by: input.created_by.as_deref(),
+                            schema_version,
+                        },
+                        &refs,
+                    )?;
+                    let KnowledgeDetail::Fact {
+                        subject_entity_id,
+                        predicate_id,
+                        object,
+                    } = item.detail
+                    else {
+                        return Err(CommonplaceError::Storage(
+                            "fact returned a membership".into(),
+                        ));
+                    };
+                    result.summary.facts_created += 1;
+                    Ok(ItemResult::Fact {
+                        index,
+                        subject_entity_id,
+                        predicate_id,
+                        knowledge_id: item.knowledge_id,
+                        object,
                         support: item.support,
                     })
                 }
@@ -180,7 +236,21 @@ pub fn record(root: &Path, input: RecordInput, timeout: Duration) -> Result<Reco
             .map_err(|error| item_error(index, error))?;
             result.items.push(outcome);
         }
-        if result.summary.memberships_created > 0 {
+        if let Some(id) = knowledge::invalid_active_endpoint(&transaction)? {
+            let index = result.items.iter().position(
+                |item| matches!(item, ItemResult::Fact { knowledge_id, .. } if *knowledge_id == id),
+            );
+            let error = CommonplaceError::InvalidInput(format!(
+                "{id} requires a permitted active type on each predicate endpoint"
+            ));
+            return Err(match index {
+                Some(index) => item_error(index, error),
+                None => error,
+            });
+        }
+        let projected_change =
+            result.summary.memberships_created > 0 || result.summary.facts_created > 0;
+        if projected_change {
             result.knowledge_version = result
                 .knowledge_version
                 .checked_add(1)
@@ -198,7 +268,8 @@ pub fn record(root: &Path, input: RecordInput, timeout: Duration) -> Result<Reco
             .map(|item| match item {
                 ItemResult::Entity { entity_id, .. }
                 | ItemResult::EntityMetadata { entity_id, .. } => entity_id.to_string(),
-                ItemResult::TypeMembership { knowledge_id, .. } => knowledge_id.to_string(),
+                ItemResult::TypeMembership { knowledge_id, .. }
+                | ItemResult::Fact { knowledge_id, .. } => knowledge_id.to_string(),
             })
             .collect();
         result.receipt = format!(
@@ -206,8 +277,14 @@ pub fn record(root: &Path, input: RecordInput, timeout: Duration) -> Result<Reco
             result.knowledge_version,
             ids.join(", ")
         );
-        if result.summary.memberships_created > 0 {
-            crate::graph::publish(root, &transaction, timeout, &result.receipt)?;
+        if projected_change {
+            crate::graph::publish(
+                root,
+                &transaction,
+                timeout,
+                &result.receipt,
+                RECOVERY_GUIDANCE,
+            )?;
         } else {
             transaction.execute_batch("COMMIT").map_err(storage_error)?;
         }

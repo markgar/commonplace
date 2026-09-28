@@ -1,12 +1,81 @@
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::domain::documents::{DocumentInput, DocumentRevision, Publication, PublicationStatus};
-use crate::domain::ids::{DocumentId, PassageId, RevisionId};
+use crate::domain::ids::{DocumentId, KnowledgeItemId, PassageId, RevisionId};
 use crate::domain::passages::PassageRange;
+use crate::domain::remove::RemovedSource;
 use crate::providers::embeddings::validate_vectors;
 use crate::{CommonplaceError, Result};
 
 use super::{database::storage_error, evidence, search_index};
+
+pub fn remove(transaction: &Transaction<'_>, source_key: &str) -> Result<RemovedSource> {
+    let document_id: i64 = transaction
+        .query_row(
+            "SELECT document_id FROM documents WHERE source_key=?1",
+            [source_key],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(storage_error)?
+        .ok_or_else(|| {
+            CommonplaceError::NotFound(format!("source key not found: {source_key:?}"))
+        })?;
+    let document_id = DocumentId::new(document_id)?;
+    let revisions = transaction
+        .prepare(
+            "SELECT revision_id FROM document_revisions WHERE document_id=?1 ORDER BY revision_id",
+        )
+        .map_err(storage_error)?
+        .query_map([document_id.value()], |row| row.get::<_, i64>(0))
+        .map_err(storage_error)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(storage_error)?;
+    let passages = transaction
+        .prepare(
+            "SELECT passage_id FROM passages JOIN document_revisions USING(revision_id)
+            WHERE document_id=?1 ORDER BY passage_id",
+        )
+        .map_err(storage_error)?
+        .query_map([document_id.value()], |row| row.get::<_, i64>(0))
+        .map_err(storage_error)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(storage_error)?;
+    let evidence = transaction
+        .prepare(
+            "SELECT knowledge_item_id, count(*) FROM knowledge_item_evidence
+            JOIN passages USING(passage_id) JOIN document_revisions USING(revision_id)
+            WHERE document_id=?1 GROUP BY knowledge_item_id ORDER BY knowledge_item_id",
+        )
+        .map_err(storage_error)?
+        .query_map([document_id.value()], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, usize>(1)?))
+        })
+        .map_err(storage_error)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(storage_error)?;
+    let removed = RemovedSource {
+        source_key: source_key.to_owned(),
+        document_id,
+        deleted_revisions: revisions.len(),
+        deleted_passages: passages.len(),
+        detached_evidence: evidence.iter().map(|(_, count)| count).sum(),
+        affected_knowledge_ids: evidence
+            .into_iter()
+            .map(|(id, _)| KnowledgeItemId::new(id))
+            .collect::<Result<_>>()?,
+    };
+    for revision in revisions {
+        search_index::remove_revision(transaction, RevisionId::new(revision)?)?;
+    }
+    transaction
+        .execute(
+            "DELETE FROM documents WHERE document_id=?1",
+            [document_id.value()],
+        )
+        .map_err(storage_error)?;
+    Ok(removed)
+}
 
 pub fn current(connection: &Connection, source_key: &str) -> Result<Option<DocumentRevision>> {
     let id: Option<i64> = connection

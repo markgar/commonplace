@@ -3,5 +3,7 @@ pub mod graph;
 pub mod ingest;
 pub mod init;
 pub mod record;
+pub mod remove;
 pub mod schema;
 pub mod search;
+pub mod withdraw;

@@ -210,6 +210,10 @@ Removal is explicit:
 commonplace remove --source-key notes/obsolete.md
 ```
 
+The argument is an exact opaque stored key, not a path to resolve. For a
+file-ingested document, copy its canonical `file://` source key from `get`;
+removal does not normalize keys or delete the original file.
+
 The command permanently deletes one document, all of its revisions and
 passages, lexical and vector rows, and evidence links. It reports detached
 evidence counts and affected knowledge IDs, rebuilds the graph, and publishes
@@ -424,11 +428,101 @@ Validation includes:
 - cited passages exist; and
 - every supplied quote and offset matches stored source text.
 
+#### Record input and output
+
+JSON input is `{"created_by":"manual","items":[...]}`; `created_by` may be omitted.
+Entity, entity_metadata and type_membership items retain their existing forms.
+A directed relationship and literal fact use:
+
+```json
+{"created_by":"manual","items":[
+  {"kind":"entity","ref":"riley","name":"Riley"},
+  {"kind":"entity","ref":"acme","name":"Acme"},
+  {"kind":"type_membership","entity":{"ref":"riley"},"entity_type":"person"},
+  {"kind":"type_membership","entity":{"ref":"acme"},"entity_type":"company"},
+  {"kind":"fact","subject":{"ref":"riley"},"predicate":"works_at","object":{"entity":{"ref":"acme"}},"support":[{"passage_id":"passage:1"}]},
+  {"kind":"fact","subject":{"ref":"riley"},"predicate":"decision","object":{"literal":"approved"},"support":[{"passage_id":"passage:1"}]}
+]}
+```
+
+The example requires declared person/company types, works_at with those entity
+endpoints, decision with person subjects and string objects, and an existing
+passage:1. Fact subject and entity object accept exactly one selector: canonical
+`id`, exact `identifier: {scheme,value}`, unambiguous `name`, or request-local
+`ref`. Local refs match `[A-Za-z][A-Za-z0-9_]{0,63}`, name preceding entity
+declarations, and last only for the request. Endpoint eligibility uses the
+resulting active state: a required membership may occur after a fact. At least
+one permitted active type must exist for each required endpoint.
+
+Fact object is exactly `{"entity": SELECTOR}` or `{"literal": VALUE}`. The
+predicate determines the literal kind. Strings (including empty strings),
+signed-i64 integer tokens and booleans are accepted for matching predicates;
+timestamp predicates require RFC3339 strings normalized to UTC. For example,
+`2026-09-28T12:25:23.123-05:00` becomes `2026-09-28T17:25:23.123Z`.
+Reject null, arrays, objects, out-of-i64 integers, and floating-point/exponent
+tokens including `1.0` and `1e0`. No integer conversion through floating point.
+Persistence section 14 owns canonical JSON and time encoding.
+
+`record --jsonl FILE` accepts one complete JSON request envelope per physical
+line, then concatenates all items into one request before opening a writer:
+
+```jsonl
+{"created_by":"manual","items":[{"kind":"entity","ref":"riley","name":"Riley"}]}
+{"created_by":"manual","items":[{"kind":"type_membership","entity":{"ref":"riley"},"entity_type":"person"},{"kind":"fact","subject":{"ref":"riley"},"predicate":"decision","object":{"literal":"approved"}}]}
+```
+
+Every fragment must have the same decoded optional `created_by`, including
+omission; there is no per-line creator or implicit inheritance. Existing creator
+validation is unchanged: supplied labels contain 1-128 Unicode scalar values;
+the CLI schema rejects explicit null. Refs may cross preceding fragments.
+Accept LF/CRLF and an optional final newline. Reject empty files, blank lines,
+BOMs, invalid UTF-8, multiple values per line, and unknown/duplicate fields.
+`{"items":[]}` is an explicit no-op. Decode errors identify the physical line;
+stateful item errors and successful result indices use flattened zero-based
+positions. There are no per-line publications or partial-success results.
+FILE, --jsonl FILE and --describe are mutually exclusive; record adds no stdin
+mode.
+
+Both inputs are bounded to 1 MiB aggregate UTF-8 bytes (including JSONL framing),
+read with at most one overflow byte; 1000 aggregate items; and 1000 entries per
+metadata/support array. These reuse the record limits, not ingestion's
+per-document publication semantics. A late invalid item or fragment rejects
+the entire request. Support asserts whole canonical passages: optional quote
+equals the full text, optional start_byte/end_byte are paired and equal its
+zero-based half-open UTF-8 revision range, and passage IDs cannot repeat.
+
+Record keeps the common envelope with operation `record`, contract version `1`
+and status `complete`. Result includes schema_version, knowledge_version,
+summary (`items`, `entities_created`, `metadata_changed`, `memberships_created`,
+`facts_created`) and one indexed item per input. A fact item includes
+`kind: fact`, index, knowledge_id, subject_entity_id, predicate_id, object and
+hydrated support. Entity object output is `{"entity_id":"entity:2"}`. Literal
+object output includes its kind, typed JSON value and exact canonical JSON:
+`{"literal_kind":"string","literal":"approved","literal_json":"\"approved\""}`.
+Knowledge get keeps common provenance/withdrawal/support fields; fact subtype
+adds `subtype: fact`, subject_entity_id, predicate_id and the same object.
+Membership output is unchanged. Every knowledge result includes support, even [].
+
+Any membership or fact creation increments knowledge_version once and drives
+the same coordinated publication branch, including fact-only follow-up requests.
+Metadata-only and empty requests do neither. Errors preserve the common stderr
+envelope: invalid_input for validation/count/framing/creator failures,
+limit_exceeded for total input bytes, not_found for missing records and conflict
+for ambiguity or locks. For example, an invalid endpoint returns exit 2 with
+`{"operation":"record","contract_version":"1","status":"failed","error":{"code":"invalid_input","message":"...items[5]...permitted active type...endpoint..."}}`
+and no successful stdout result. Post-commit cleanup or response-delivery errors
+retain the committed IDs/version and do-not-retry guidance; they are not rollback.
+
+`record --describe` returns the generated execution input_schema, a valid
+example, current vocabulary, JSONL framing/creator/limit metadata with valid
+example fragments (using the same input_schema), and stateful/lexical validation
+rules beyond JSON Schema value validation.
+
 ### 7.4 Withdrawal and history
 
-`commonplace withdraw` marks one active knowledge item withdrawn and republishes the
-graph. Withdrawn items remain readable from SQLite history but are absent from
-the active graph.
+`commonplace withdraw` marks one or more active knowledge items withdrawn and
+republishes the graph. Withdrawn items remain readable from SQLite history but are
+absent from the active graph.
 
 Withdrawal is final. There is no restore lifecycle; a corrected assertion is a
 new knowledge item.
@@ -438,6 +532,47 @@ resulting active state before mutation. It is rejected if any fact that would
 remain active loses every permitted type on a required subject or object
 endpoint, unless that dependent fact is included in the same withdrawal request.
 Any invalid or already withdrawn ID rejects the complete batch.
+
+The JSON-file input is:
+
+```sh
+commonplace withdraw withdraw.json --json
+commonplace withdraw --describe --json
+```
+
+```json
+{"withdrawn_by":"manual","knowledge_ids":["knowledge:4","knowledge:5"]}
+```
+
+`knowledge_ids` contains 1-1000 unique canonical `knowledge:<positive i64>` IDs.
+Empty batches and duplicate IDs are rejected, not no-ops or deduplicated writes.
+The optional actor label contains 1-128 Unicode scalar values when supplied;
+explicit null is rejected. Unknown and duplicate fields are rejected. Input is
+bounded to 1 MiB; the writer/publication timeout is two seconds. There is no
+stdin, JSONL, positional-ID alias or check mode.
+
+Success has `operation: withdraw`, `contract_version: "1"`, `status: complete`,
+and a result with `knowledge_version`, `summary: {"items":N,"withdrawn":N}` and
+`items` in input order. Each item contains `index` and the complete retained
+Knowledge fields: knowledge_id, schema_version, creation/withdrawal provenance,
+subtype/detail and support (including `[]`). It has no outer `kind: knowledge`
+tag. All items share one application timestamp and the version advances once.
+Stored canonical literals and creation/schema provenance do not change.
+
+Invalid shape, count, label, ID, duplicates, already-withdrawn items or invalid
+remaining endpoints yield `invalid_input`; missing IDs yield `not_found`.
+Byte-limit errors yield `limit_exceeded`, and lock contention uses `conflict`.
+Every error rejects the complete batch unless explicitly identified as
+post-commit. Committed cleanup (`post_commit_cleanup`) or response-delivery
+(`internal_error`) errors retain the committed IDs/version and instruct callers
+not to retry withdrawal, but to inspect those IDs with `get`. Only cleanup
+failures additionally instruct `graph rebuild`. Uncertain delivery requires
+inspection of the submitted IDs; there are no retained request IDs or replays.
+
+`withdraw --describe` is exclusive with the input file and needs no store or
+inference. It returns the generated execution `input_schema`, a validated
+`example`, a typed complete-envelope `output_example`, and `validation` metadata
+for stateful and lexical rules beyond JSON Schema.
 
 ## 8. Graph projection and queries
 
@@ -622,11 +757,10 @@ fields, and example read-only SPARQL SELECT patterns. Standard
 `--help`, these two schema commands, and generated input descriptions replace a
 general `commonplace capabilities` command.
 
-`graph schema` is a static description and does not open the store. While P5a
-ships membership/evidence projection without authoring commands, it identifies
-facts as unsupported rather than promising successful fact projection. Rebuild
-rejects active unsupported facts instead of silently publishing an incomplete
-graph. The `graph rebuild` success payload is `{"knowledge_version":N}`, inside
+`graph schema` is a static description and does not open the store. It identifies
+supported membership/fact projection and its evidence mapping. Rebuild rejects
+invalid active state instead of silently publishing an incomplete graph.
+The `graph rebuild` success payload is `{"knowledge_version":N}`, inside
 the common envelope; `N` is the unchanged committed SQLite version.
 
 Complex JSON boundaries describe themselves:
@@ -635,6 +769,7 @@ Complex JSON boundaries describe themselves:
 commonplace ingest --describe --json
 commonplace schema apply --describe --json
 commonplace record --describe --json
+commonplace withdraw --describe --json
 commonplace graph schema --json
 ```
 

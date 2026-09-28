@@ -3,5 +3,7 @@ pub mod evidence;
 pub mod ids;
 pub mod knowledge;
 pub mod passages;
+pub mod remove;
 pub mod schema;
 pub mod search;
+pub mod withdraw;

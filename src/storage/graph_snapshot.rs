@@ -1,13 +1,25 @@
 use rusqlite::{Connection, Row, params};
 
 use super::database::storage_error;
+use super::knowledge;
+use crate::domain::knowledge::FactObject;
 use crate::{CommonplaceError, Result};
 
 const PAGE_SIZE: i64 = 256;
 const ACTIVE: &str = "WITH active AS (
-    SELECT k.knowledge_item_id, k.schema_version, m.entity_id, m.entity_type_id
-    FROM knowledge_items k JOIN entity_type_memberships m USING (knowledge_item_id)
+    SELECT k.knowledge_item_id, k.schema_version
+    FROM knowledge_items k
     WHERE k.withdrawn_at IS NULL
+), memberships AS (
+    SELECT a.*, m.entity_id, m.entity_type_id FROM active a
+    JOIN entity_type_memberships m USING(knowledge_item_id)
+), active_facts AS (
+    SELECT a.*, f.subject_entity_id, f.predicate_id, f.object_entity_id, f.literal_json
+    FROM active a JOIN facts f USING(knowledge_item_id)
+), referenced_entities AS (
+    SELECT entity_id FROM memberships
+    UNION SELECT subject_entity_id FROM active_facts
+    UNION SELECT object_entity_id FROM active_facts WHERE object_entity_id IS NOT NULL
 ), cited AS (
     SELECT DISTINCT e.passage_id FROM knowledge_item_evidence e
     JOIN active a USING (knowledge_item_id)
@@ -19,6 +31,18 @@ pub(crate) enum SnapshotRecord {
         schema_version: i64,
         entity: i64,
         entity_type: i64,
+    },
+    Fact {
+        id: i64,
+        schema_version: i64,
+        subject: i64,
+        predicate: i64,
+        object: FactObject,
+    },
+    Predicate {
+        id: i64,
+        name: String,
+        object_kind: String,
     },
     Entity {
         id: i64,
@@ -98,11 +122,10 @@ impl<'a> GraphSnapshot<'a> {
                 "active knowledge has invalid subtype cardinality or kind".into(),
             ));
         }
-        let facts: bool = connection.query_row(
-            "SELECT EXISTS(SELECT 1 FROM knowledge_items WHERE withdrawn_at IS NULL AND kind='fact')",
-            [], |r| r.get(0)).map_err(storage_error)?;
-        if facts {
-            return Err(CommonplaceError::Graph("active fact projection is not supported by this release; cannot publish an incomplete graph".into()));
+        if let Some(id) = knowledge::invalid_active_endpoint(connection)? {
+            return Err(CommonplaceError::Graph(format!(
+                "{id} has no permitted active type on a required predicate endpoint"
+            )));
         }
         let mut check = connection
             .prepare("PRAGMA foreign_key_check")
@@ -126,7 +149,7 @@ impl<'a> GraphSnapshot<'a> {
 
     pub(crate) fn visit(&self, mut emit: impl FnMut(SnapshotRecord) -> Result<()>) -> Result<()> {
         self.pages(
-            "SELECT knowledge_item_id, schema_version, entity_id, entity_type_id FROM active
+            "SELECT knowledge_item_id, schema_version, entity_id, entity_type_id FROM memberships
              WHERE knowledge_item_id>?1 ORDER BY knowledge_item_id LIMIT ?2",
             |r| {
                 Ok(SnapshotRecord::Membership {
@@ -139,8 +162,34 @@ impl<'a> GraphSnapshot<'a> {
             &mut emit,
         )?;
         self.pages(
+            "SELECT knowledge_item_id,schema_version,subject_entity_id,predicate_id,
+                    object_kind,object_entity_id,literal_json
+             FROM active_facts JOIN predicates USING(predicate_id)
+             WHERE knowledge_item_id>?1 ORDER BY knowledge_item_id LIMIT ?2",
+            |r| {
+                let kind: String = r.get(4)?;
+                let literal: Option<String> = r.get(6)?;
+                let object = knowledge::stored_object(&kind, r.get(5)?, literal.as_deref())
+                    .map_err(|error| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            6,
+                            rusqlite::types::Type::Text,
+                            Box::new(error),
+                        )
+                    })?;
+                Ok(SnapshotRecord::Fact {
+                    id: r.get(0)?,
+                    schema_version: r.get(1)?,
+                    subject: r.get(2)?,
+                    predicate: r.get(3)?,
+                    object,
+                })
+            },
+            &mut emit,
+        )?;
+        self.pages(
             "SELECT entity_id, canonical_name FROM entities
-             WHERE entity_id>?1 AND entity_id IN (SELECT entity_id FROM active)
+             WHERE entity_id>?1 AND entity_id IN (SELECT entity_id FROM referenced_entities)
              ORDER BY entity_id LIMIT ?2",
             |r| {
                 Ok(SnapshotRecord::Entity {
@@ -152,12 +201,25 @@ impl<'a> GraphSnapshot<'a> {
         )?;
         self.pages(
             "SELECT entity_type_id, name FROM entity_types
-             WHERE entity_type_id>?1 AND entity_type_id IN (SELECT entity_type_id FROM active)
+             WHERE entity_type_id>?1 AND entity_type_id IN (SELECT entity_type_id FROM memberships)
              ORDER BY entity_type_id LIMIT ?2",
             |r| {
                 Ok(SnapshotRecord::EntityType {
                     id: r.get(0)?,
                     name: r.get(1)?,
+                })
+            },
+            &mut emit,
+        )?;
+        self.pages(
+            "SELECT predicate_id,name,object_kind FROM predicates
+             WHERE predicate_id>?1 AND predicate_id IN (SELECT predicate_id FROM active_facts)
+             ORDER BY predicate_id LIMIT ?2",
+            |r| {
+                Ok(SnapshotRecord::Predicate {
+                    id: r.get(0)?,
+                    name: r.get(1)?,
+                    object_kind: r.get(2)?,
                 })
             },
             &mut emit,

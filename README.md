@@ -7,8 +7,9 @@ hybrid SQLite search, explicitly authored cited knowledge, and local graph
 queries.
 
 The Rust implementation supports store initialization, additive vocabulary,
-file and generic stdin/JSONL ingestion, hybrid search, atomic cited entity/type
-authoring, authoritative reads, and read-only RDF graph queries and rebuild:
+file and generic stdin/JSONL ingestion, hybrid search, atomic cited entity/type/fact
+authoring and withdrawal, explicit source removal, authoritative reads, and
+read-only RDF graph queries and rebuild:
 
 ```sh
 cargo run --bin commonplace -- --store .commonplace init
@@ -89,7 +90,7 @@ vocabulary. Vocabulary operations neither load inference
 nor open or rebuild Oxigraph, and remain available when derived graph state is
 missing or corrupt.
 
-## Cited entities and types
+## Cited entities, types and facts
 
 After ingesting evidence and applying your vocabulary, create `record.json`:
 
@@ -114,15 +115,56 @@ cargo run --bin commonplace -- --store .commonplace get entity:1
 cargo run --bin commonplace -- --store .commonplace get knowledge:1
 ```
 
-One JSON request is atomic, including all entities, metadata, memberships, and
+One JSON request is atomic, including all entities, metadata, memberships, facts, and
 graph publication. Repeat membership items to assign multiple types; successful
 repeated writes receive distinct knowledge IDs. Entity creation is explicit and
 never merges by name. Memberships resolve exactly one selector: `{"id":"entity:1"}`,
 `{"identifier":{"scheme":"email","value":"riley@example.test"}}`, `{"name":"R"}`,
 or `{"ref":"riley"}`. Exact case-sensitive name/alias matches must be unambiguous.
 Local refs match `[A-Za-z][A-Za-z0-9_]{0,63}`, refer only to preceding entity items,
-and last only for this request. Fact authoring, `record` JSONL, withdrawal, and
-name changes are not supported by this release (`ingest --jsonl` is supported).
+and last only for this request. Name changes are not supported by this release.
+
+Add directed facts using a declared predicate and matching subject/object types:
+
+```json
+{"created_by":"manual","items":[
+  {"kind":"entity","ref":"acme","name":"Acme"},
+  {"kind":"type_membership","entity":{"ref":"acme"},"entity_type":"company"},
+  {"kind":"fact","subject":{"id":"entity:1"},"predicate":"works_at",
+   "object":{"entity":{"ref":"acme"}},"support":[{"passage_id":"passage:1"}]}
+]}
+```
+
+Fact subjects and entity objects accept the same selectors as memberships.
+Every required endpoint needs at least one permitted active type in the
+**resulting** state; memberships may appear after facts within the request.
+For a literal predicate, use `"object":{"literal":"approved"}` (string),
+`{"literal":42}` (integer), `{"literal":true}` (boolean), or
+`{"literal":"2026-09-28T12:25:23.123-05:00"}` (timestamp).
+Declare the corresponding predicate kind and subject types with `schema apply`.
+Timestamps normalize to UTC (`2026-09-28T17:25:23.123Z` here). Integer limits are
+exactly -9223372036854775808 through 9223372036854775807; floats/exponent tokens,
+including `1.0` and `1e0`, are rejected. Null, arrays and objects are not literals.
+Empty strings are valid string facts. Repeated successful facts get distinct
+knowledge IDs, including when the subject, predicate, object and citations match.
+
+`record --jsonl facts.jsonl --json` accepts one request-envelope fragment per
+line and flattens **all** fragments into one atomic request, not ingestion's
+per-document writes:
+
+```jsonl
+{"created_by":"manual","items":[{"kind":"entity","ref":"riley","name":"Riley"}]}
+{"created_by":"manual","items":[{"kind":"type_membership","entity":{"ref":"riley"},"entity_type":"person"}]}
+```
+
+Refs cross preceding fragments. Every fragment must have the same decoded
+optional `created_by`, including omission; there is no inheritance or per-line
+creator. Existing label validation is unchanged (explicit null is not accepted
+by the CLI schema). LF/CRLF and an optional final newline are accepted.
+Empty files, blank lines, BOMs, invalid UTF-8, multiple values per line, and
+unknown/duplicate fields fail the complete request; `{"items":[]}` is an explicit
+no-op. Decode errors name physical lines; item indices use flattened input order.
+The file, --jsonl and --describe modes are exclusive; record has no stdin mode.
 
 `entity_metadata` items require `entity_id` and accept `add_aliases`,
 `remove_aliases`, `add_identifiers`, and `remove_identifiers`. Removals must belong
@@ -132,7 +174,7 @@ Aliases/identifiers retain creation time and optional request `created_by`.
 Neither metadata correction nor a bare entity/empty request rebuilds the graph
 or increments `knowledge_version`; they do not repair an unavailable graph.
 
-Every membership result and knowledge read includes `support`, including `[]`.
+Every membership/fact result and knowledge read includes `support`, including `[]`.
 Support always cites a **whole canonical passage**, not an arbitrary snippet.
 Optional `quote` must equal the entire text exactly. Optional `start_byte` and
 `end_byte` must both be supplied and match that passage's zero-based half-open
@@ -140,18 +182,27 @@ UTF-8 byte range in its immutable revision. Old revision evidence stays valid
 after new ingestion. Duplicate support IDs, bad quotes/offsets, undefined refs,
 unknown vocabulary, or a late invalid item roll back the entire request.
 
-Input is bounded to 1 MiB UTF-8 bytes, 1000 items, and 1000 entries in each
+Input is bounded to 1 MiB aggregate UTF-8 bytes (including JSONL separators),
+1000 aggregate items, and 1000 entries in each
 metadata/support array. Names, aliases, and identifier values contain 1-1024
 Unicode scalar values and no NUL; supplied `created_by` contains 1-128 Unicode
 scalar values. Unknown and duplicate JSON fields are rejected. `--describe`
-generates the execution JSON Schema, a minimal example, and current vocabulary.
+generates the execution JSON Schema, a minimal example, current vocabulary,
+JSONL examples/framing rules, and stateful/lexical validation rules.
 `record` returns `schema_version`, `knowledge_version`, summary counts, and one
 indexed result per input item. Entity reads include complete metadata and active
 type/membership/fact IDs. Knowledge reads include subtype, schema version,
 creation/withdrawal state, and hydrated support; retained withdrawn memberships
-remain readable.
+remain readable. Summary adds `facts_created`. A fact result has
+`kind`, `index`, `knowledge_id`, `subject_entity_id`, `predicate_id`, `object`,
+and `support`. Relationship object output is `{"entity_id":"entity:2"}`; literal
+output is, for example,
+`{"literal_kind":"string","literal":"approved","literal_json":"\"approved\""}`.
+Fact get returns `kind: knowledge`, `subtype: fact`, common provenance/withdrawal/
+support fields and the same subject, predicate and object. Membership fields are
+unchanged. Literal JSON is the exact canonical SQLite representation.
 
-Membership publication builds from the pending SQLite transaction, then activates
+Membership/fact publication builds from the pending SQLite transaction, then activates
 the verified graph and commits under the publication lock. A reported commit
 failure restores the previous graph; crashes in the activation/commit window
 fail closed until explicit `graph rebuild`. **A nonzero exit can follow a
@@ -161,6 +212,118 @@ Their messages identify committed IDs/version and say not to retry `record`;
 inspect those IDs with `get`, and rebuild for cleanup failures. If the process or
 output stream dies, receipt delivery cannot be guaranteed: inspect canonical
 state before retrying a non-idempotent request.
+
+## Atomic withdrawal and retained history
+
+Create `withdraw.json` using actual knowledge IDs returned by `record` or `get`:
+
+```json
+{"withdrawn_by":"manual","knowledge_ids":["knowledge:4","knowledge:5"]}
+```
+
+```sh
+cargo run --bin commonplace -- withdraw --describe --json
+cargo run --bin commonplace -- --store .commonplace withdraw withdraw.json --json
+cargo run --bin commonplace -- --store .commonplace get knowledge:4
+```
+
+One JSON-file request withdraws **all** selected active memberships/facts or none.
+The graph and entity active type/membership/fact IDs exclude withdrawn items.
+`get` retains the exact subtype, canonical literal, evidence, schema version and
+creation provenance, adding `withdrawn_at` and optional `withdrawn_by`. Withdrawal
+is final; record a new corrected assertion rather than restoring or rewriting one.
+Withdrawal does not delete sources, change search, detach citations, or cascade.
+Later explicit source removal still detaches its evidence from retained history.
+
+The complete proposed batch is validated **before** changing lifecycle columns.
+Removing the last permitted type on either endpoint of a remaining active fact
+fails. Retain another permitted active type or include every dependent fact in the
+same withdrawal request; input order does not affect validity. Another active
+membership of the same permitted type also suffices.
+
+Input accepts 1-1000 unique canonical `knowledge:<positive i64>` IDs and at most
+1 MiB of JSON bytes. Empty batches, duplicates, wrong ID tags, unknown/duplicate
+fields, bad labels and already-withdrawn IDs yield `invalid_input`; unknown IDs
+yield `not_found`. Supplied `withdrawn_by` contains 1-128 Unicode scalar values;
+omit it for no label (explicit null is rejected). Oversize input yields
+`limit_exceeded`. All failures reject the whole batch. The writer/publication
+timeout is two seconds. There is no stdin, JSONL, positional-ID or check mode.
+`--describe` is exclusive with the file argument, requires no store or models,
+and returns the generated execution schema, input example, typed output example
+and stateful validation rules.
+
+Success uses `operation: withdraw`, `contract_version: "1"`, `status: complete`.
+The result contains `knowledge_version`, `summary: {"items":N,"withdrawn":N}`, and
+one indexed item per input ID in request order. Items carry the complete existing
+Knowledge fields (without `get`'s outer `kind: knowledge` tag), including `support`
+even when empty. All selected items share one withdrawal timestamp; the
+knowledge version advances once. `withdraw --describe` shows a complete example.
+
+The existing coordinated publication and rollback rules apply. **A nonzero exit
+can follow a successful commit:** cleanup errors use `post_commit_cleanup`,
+response-delivery errors use `internal_error`. Both report the committed version
+and IDs with **do not retry withdraw** guidance; inspect those IDs using `get`.
+Cleanup failures additionally require `graph rebuild`. If delivery is uncertain,
+inspect the submitted IDs before retrying; responses are not replayed.
+
+## Explicit source removal
+
+```sh
+cargo run --bin commonplace -- remove --describe --json
+cargo run --bin commonplace -- --store .commonplace get doc:1
+cargo run --bin commonplace -- --store .commonplace remove --source-key 'opaque:key' --json
+```
+
+Use the **exact stored source key** returned by `get`. File ingestion uses a
+canonical `file://` URL; removal never resolves paths, normalizes URLs, trims
+whitespace, or expands patterns. Keys must be nonempty and contain no NUL.
+`--describe` generates a schema/example for the CLI argument object and a typed
+output example without opening a store or loading models. It is **not a JSON
+input mode** and cannot be combined with `--source-key`.
+
+Removal permanently deletes that document, **all** revisions and passages,
+lexical/vector index rows, and evidence links. It does not delete original source
+files or remove/withdraw authored knowledge, entities, or vocabulary. Affected
+active knowledge remains readable and projected, possibly with `support: []`;
+unrelated evidence remains unchanged. Directory scan absence never removes a
+source. There is no batch removal, restore, or tombstone. Reingesting the same
+key creates a new document identity and does not reattach old citations.
+
+```json
+{
+  "operation": "remove",
+  "contract_version": "1",
+  "status": "complete",
+  "result": {
+    "source_key": "opaque:key",
+    "document_id": "doc:1",
+    "deleted_revisions": 2,
+    "deleted_passages": 3,
+    "detached_evidence": 4,
+    "affected_knowledge_ids": ["knowledge:1", "knowledge:2"],
+    "knowledge_version": 2
+  }
+}
+```
+
+`detached_evidence` counts deleted knowledge/passage link rows across all
+revisions. Affected knowledge IDs are distinct and numerically sorted, including
+already-withdrawn items whose links were removed; withdrawal state is unchanged.
+Each successful removal increments `knowledge_version` once, including removal
+of an uncited or empty source. Unknown or already-removed keys return `not_found`
+(exit 2) without mutation. Deleted document/revision/passage IDs return
+`not_found` from `get` and cannot appear in search.
+
+Removal uses the same coordinated publication as record. Before-commit failures
+roll back the deletion; reported commit failure also restores the previous graph.
+Restoration failure is explicit, and crash-window graph mismatches fail closed
+until `graph rebuild`. **A nonzero exit may follow a successful commit:** cleanup
+or final-sync errors use `post_commit_cleanup`, and response delivery errors use
+`internal_error`. Their receipt identifies the removed document/key, affected
+knowledge IDs, and committed version. Do not blindly retry `remove`: verify the
+removed document is `not_found` and inspect affected knowledge with `get`; run
+`graph rebuild` for cleanup failures. Process/output-stream death can prevent
+receipt delivery, so inspect canonical state before retrying.
 
 ## Graph queries and explicit rebuild
 
@@ -175,10 +338,11 @@ cargo run --bin commonplace -- --store .commonplace graph rebuild --json
 
 `graph schema` describes the canonical RDF 1.1 mapping, ID namespaces, property
 datatypes, evidence fields, and SELECT examples without opening a store. Rebuild
-currently projects active type memberships, their referenced entities/types, and
+projects active type memberships and facts, their referenced entities/types/predicates, and
 complete cited passage/revision/document fields from SQLite, including pending
-`record` writes. Active facts fail explicitly rather than being omitted;
-fact authoring/projection belongs to P6. Unused vocabulary and bare entities do
+`record` writes. Facts use distinct knowledge IRIs with predicate/object links
+and canonical typed literals, not shortcut triples or synthetic value nodes.
+Unused vocabulary and bare entities do
 not appear in the default graph. Empty stores retain version-zero metadata in
 the query-visible reserved named graph `urn:commonplace:metadata`.
 
@@ -493,8 +657,17 @@ COMMONPLACE_MODEL_CACHE=/absolute/path/to/prepared/pinned-models \
 The file check runs the public binary over multiple files, repeats ingestion,
 makes metadata and content revisions, reads exact old/new evidence, and checks current
 FTS/vector IDs on a version-2 store. It verifies ingestion leaves graph files
-unchanged, then records a multiply-typed entity through the public CLI, compares
-old/new passage citations with exact reads, and repeats after rebuild/reopen.
+unchanged, then records a multiply-typed entity, cited relationship and literal
+decision through the public CLI, compares old/new passage citations with exact
+reads, and repeats after rebuild/reopen.
+It then removes that multiply revised source by its exact stored file key,
+checks full canonical/index/evidence deletion, retained empty/mixed membership,
+relationship and literal-fact
+support and unrelated citations, public search exclusion, graph/reopen parity,
+and new document identity on reingestion. All sources used are fresh temporary
+test files. It then withdraws cited and retained empty-support facts atomically,
+checks exact historical fields, active IDs/RDF absence, unchanged sources/search,
+rebuild/reopen parity, and withdrawal lifecycle preservation through later removal.
 The stream check runs real
 nonempty stdin/JSONL submissions, unchanged and metadata-only reruns, partial
 failures, exact old reads, and current index/unchanged graph checks. The file

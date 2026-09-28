@@ -6,6 +6,8 @@ use oxigraph::store::Store;
 use super::graph_error;
 use super::schema::{METADATA, Property as P, Resource as R, STORE};
 use crate::Result;
+use crate::domain::knowledge::{FactObject, LiteralValue};
+use crate::domain::schema::ObjectKind;
 use crate::storage::graph_snapshot::{GraphSnapshot, SnapshotRecord};
 
 const BATCH_SIZE: usize = 512;
@@ -104,7 +106,10 @@ fn project(snapshot: &GraphSnapshot<'_>, mut emit: impl FnMut(Quad) -> Result<()
     emit(metadata(snapshot.knowledge_version))?;
     snapshot.visit(|record| {
         let (resource, id) = match &record {
-            SnapshotRecord::Membership { id, .. } => (R::Knowledge, *id),
+            SnapshotRecord::Membership { id, .. } | SnapshotRecord::Fact { id, .. } => {
+                (R::Knowledge, *id)
+            }
+            SnapshotRecord::Predicate { id, .. } => (R::Predicate, *id),
             SnapshotRecord::Entity { id, .. } => (R::Entity, *id),
             SnapshotRecord::EntityType { id, .. } => (R::EntityType, *id),
             SnapshotRecord::Passage { id, .. } => (R::Passage, *id),
@@ -143,6 +148,52 @@ fn project(snapshot: &GraphSnapshot<'_>, mut emit: impl FnMut(Quad) -> Result<()
             }
             SnapshotRecord::Entity { name, .. } | SnapshotRecord::EntityType { name, .. } => {
                 put(P::Name, Literal::new_simple_literal(name).into())?;
+            }
+            SnapshotRecord::Predicate {
+                name, object_kind, ..
+            } => {
+                put(P::Name, Literal::new_simple_literal(name).into())?;
+                put(
+                    P::ObjectKind,
+                    Literal::new_simple_literal(object_kind).into(),
+                )?;
+            }
+            SnapshotRecord::Fact {
+                schema_version,
+                subject,
+                predicate,
+                object,
+                ..
+            } => {
+                put(P::Kind, Literal::new_simple_literal("fact").into())?;
+                put(P::SchemaVersion, Literal::from(schema_version).into())?;
+                put(P::Subject, R::Entity.node(subject)?.into())?;
+                put(P::Predicate, R::Predicate.node(predicate)?.into())?;
+                let object = match object {
+                    FactObject::Entity { entity_id } => R::Entity.node(entity_id.value())?.into(),
+                    FactObject::Literal(value) => {
+                        put(
+                            P::LiteralKind,
+                            Literal::new_simple_literal(value.literal_kind.as_str()).into(),
+                        )?;
+                        put(
+                            P::LiteralJson,
+                            Literal::new_simple_literal(value.literal_json).into(),
+                        )?;
+                        let literal = match value.literal {
+                            LiteralValue::String(text)
+                                if value.literal_kind == ObjectKind::Timestamp =>
+                            {
+                                Literal::new_typed_literal(text, xsd::DATE_TIME)
+                            }
+                            LiteralValue::String(text) => Literal::new_simple_literal(text),
+                            LiteralValue::Integer(value) => Literal::from(value),
+                            LiteralValue::Boolean(value) => Literal::from(value),
+                        };
+                        literal.into()
+                    }
+                };
+                put(P::Object, object)?;
             }
             SnapshotRecord::Passage {
                 revision,
