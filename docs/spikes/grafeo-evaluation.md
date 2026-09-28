@@ -2,19 +2,22 @@
 
 ## Outcome
 
-**Packaging passes on macOS arm64 and Windows x64, but Grafeo 0.5.43 does not
-satisfy the complete Commonplace graph contract.**
+**Packaging passes on every intended target: macOS arm64, Windows x64 and
+arm64, and Linux x64 and arm64. Grafeo 0.5.43 does not yet satisfy the complete
+Commonplace graph contract.**
 
-The standalone Windows executable ran on an independent Windows 11 Pro x64
-machine without Rust or any other dependency installed. Cypher projection,
-canonical evidence properties, persistence, and role-scoped read-only sessions
-passed. Database-level read-only enforcement and explicit external query
-cancellation failed.
+The standalone Windows x64 executable ran on an independent Windows 11 Pro x64
+machine without Rust or any other dependency installed. Native GitHub-hosted
+runners then built and executed Windows arm64, Linux x64, and Linux arm64
+artifacts. Cypher projection, canonical evidence properties, persistence, and
+role-scoped read-only sessions passed on every tested target.
 
 Grafeo therefore demonstrates that a small, self-contained, cross-platform
-Rust graph package is practical, but it is not the production graph engine
-unless the missing behaviors are added or the Commonplace requirements change.
-The graph-engine technology gate remains open.
+Rust graph package is practical. Database-level read-only enforcement remains
+broken, though the native role-scoped control used by public queries works.
+Query deadlines produce timeout errors on every target where the corrected
+probe exceeded its deadline, but cancellation latency varied substantially.
+Grafeo has no public external cancellation handle.
 
 ## Evaluated component
 
@@ -37,16 +40,18 @@ The spike source, lockfile, platform verifier, and build workflow live under
 | Persistent close and reopen | Pass | Reopening the graph returned both stored entities on macOS and Windows. |
 | Role-scoped read-only session | Pass | `Role::ReadOnly` rejected the tested Cypher `SET` mutation. |
 | Database-level read-only configuration | Fail | A database opened with `Config::read_only` accepted the same Cypher `SET` mutation without returning an error. |
-| Query deadline | Pass, with probe correction required | The GitHub Windows runner returned Grafeo's timeout error. The initial independent-machine query finished at the 50 ms boundary, showing that the original workload was not deterministic across machines. The harness now isolates this check with a 1 ms deadline and a larger workload. |
+| Query deadline | Partial | The corrected probe returned Grafeo's timeout error, but elapsed time ranged from 199 ms on macOS arm64 to almost 9 seconds on Linux x64 for a 1 ms deadline. |
 | Explicit external cancellation | Fail | Grafeo 0.5.43 exposes query deadlines but no public interrupt or cancellation handle that another task can invoke. |
 
 Database-level read-only mode and role-scoped authorization are distinct
 controls. The passing role check does not satisfy Commonplace's requirement
 that the graph itself be opened in a mode that natively rejects mutations.
 
-A deadline also does not replace explicit cancellation. Commonplace needs to
-stop an executing graph query when its caller is cancelled, not only when a
-preconfigured duration expires.
+A deadline also does not replace explicit cancellation. A cancellation token
+in Commonplace cannot interrupt `execute_cypher()` because Grafeo exposes no
+handle for it. For the synchronous CLI, process termination can stop a
+user-cancelled command, but a future long-running server would need an upstream
+API, a fork, or process-isolated queries.
 
 ## Windows package evidence
 
@@ -80,7 +85,38 @@ the configured deadline, and therefore correctly reported no timeout. This is
 a test-workload variance rather than evidence that the executable failed to
 launch or package correctly.
 
-## macOS package evidence
+## Additional platform evidence
+
+Manual GitHub Actions run
+[`36369182949`](https://github.com/markgar/commonplace/actions/runs/36369182949)
+built and executed the remaining supported targets once. The completed
+artifacts were:
+
+| Target | Bytes | SHA-256 | Packaging result |
+|---|---:|---|---|
+| Windows arm64 | 5,680,128 | `019145C6BCE982E6E99F5109C944100FB7694651472ABBAF795DA9ACE2B352DA` | Pass |
+| Linux x64 | 8,966,272 | `b08cef73d39fce4145b3e3372dbe19b0b4f879674a6de23b6fc17bc9a6a7f6e0` | Pass |
+| Linux arm64 | 8,209,840 | `37eb46f1dae2a53b885c07fb678e8400e1a2fea48efed85a68b49dd1d8efd2d7` | Pass |
+
+Windows arm64 completed the full probe natively on
+`windows-11-vs2026-arm`. Both Linux binaries completed the full probe with an
+empty environment. Their only dynamic dependencies were the platform loader,
+glibc, `libm`, `libgcc_s`, and the virtual dynamic shared object.
+
+The corrected 1 ms timeout probe returned a Grafeo timeout error on all three
+targets, but with materially different elapsed times:
+
+| Target | Elapsed time |
+|---|---:|
+| Windows arm64 | 821 ms |
+| Linux arm64 | 4,090 ms |
+| Linux x64 | 8,975 ms |
+
+The Linux runs therefore prove eventual interruption, not close adherence to
+the configured deadline. The spike should not represent query duration as a
+hard upper bound without another containment mechanism.
+
+## macOS arm64 package evidence
 
 The release build on macOS arm64 produced an approximately 6.9 MB executable.
 Its dynamic dependencies were limited to macOS system libraries:
@@ -95,14 +131,14 @@ OpenSSL libraries and a much larger native dependency chain.
 
 ## Decision
 
-Do not select Grafeo 0.5.43 as the Commonplace graph engine under the current
-requirements. Its packaging characteristics are strong, and its Cypher and
-persistence behavior cover the core data model, but accepting mutations in
-database-level read-only mode and lacking external cancellation are release
-blockers.
+Grafeo is the strongest current candidate for Commonplace because it preserves
+embedded Cypher while packaging cleanly on every intended OS and architecture.
+Public Cypher must always use `Role::ReadOnly`; `Config::read_only` cannot be
+relied on for mutation rejection in version 0.5.43.
 
-Continue using the Commonplace graph abstraction while the technology gate is
-open. A later Grafeo version can be reevaluated if it provides both native
-database-level mutation rejection and a public cancellation mechanism. Avoid
-shipping parallel graph backends or weakening these requirements solely to
-adopt Grafeo.
+Before final selection, Commonplace must make one bounded decision about query
+cancellation. For the synchronous CLI, native deadlines plus whole-process
+termination may be accepted, with the observed deadline overshoot documented.
+If a strict duration bound or in-process cancellation token remains mandatory,
+Grafeo needs an upstream fix, a fork, or process-isolated graph queries. No
+second graph backend should be introduced.

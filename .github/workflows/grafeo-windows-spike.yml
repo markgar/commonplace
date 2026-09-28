@@ -22,10 +22,6 @@ jobs:
             runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             artifact: grafeo-linux-arm64
-          - name: macOS x64
-            runner: macos-15-intel
-            target: x86_64-apple-darwin
-            artifact: grafeo-macos-x64
 
     steps:
       - name: Check out repository

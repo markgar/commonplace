@@ -20,7 +20,7 @@ cargo run --manifest-path spikes/grafeo-evaluation/Cargo.toml --release
 
 ## Windows PowerShell
 
-Download and extract the `grafeo-windows-x64` artifact produced by the
+Download and extract the appropriate Windows artifact produced by the manual
 `Grafeo platform spike` GitHub Actions workflow. No Rust toolchain is required
 on the test machine. From the extracted directory:
 
