@@ -93,6 +93,11 @@ prerequisite packet or named gate has been integrated, not merely that somebody
 has started it. P2 has separate graph and inference gates so an unrelated
 runtime question does not unnecessarily block both lanes.
 
+Execution policy: run development checks and spikes locally. Automatic GitHub
+Actions CI is disabled to conserve Actions usage. Do not enable, dispatch, or
+expand Actions workflows without fresh explicit approval. This changes where
+validation runs, not the supported release targets or required release evidence.
+
 | Packet | User-visible outcome or gate | Depends on | Primary ownership |
 | --- | --- | --- | --- |
 | P0 | Agree the first execution boundaries and unresolved decisions | Baseline inspection | Integrator |
@@ -123,10 +128,11 @@ Recommended schedule:
 
 P9 may precede P4 if streamed input is more urgent; neither depends on the other.
 P5a does not need ingestion; P5b needs evidence IDs but not search or streaming
-adapters. P2 does not block vocabulary work. Required-target inference
-feasibility is checked early in P2, before committing to its persisted
-representation. Final application packaging and clean-target acceptance remain
-in P10; do not repeat the entire release exercise for every packet.
+adapters. P2 does not block vocabulary work. Local inference feasibility is
+checked early in P2; unverified target portability is an explicit risk, not
+evidence of success. Development can proceed on the proven host, but required
+target evidence still gates P10. Final application packaging and clean-target
+acceptance remain in P10; do not repeat the release exercise for every packet.
 
 ### 3.3 P0: execution kickoff
 
@@ -217,21 +223,25 @@ Cypher with a `LIMIT` requires evidence that query semantics are preserved.
 If the engine cannot satisfy the specified behavior, report the mismatch for
 an explicit component or specification decision rather than designing a fallback.
 
-**Inference gate:** verify the combined inference/native stack on every required
-target, including immutable model acquisition, embedding and reranking execution,
-and offline cached operation. The existing reports prove Grafeo across targets
-but the combined inference stack only on macOS arm64. Reuse that evidence and
-the existing manual workflow scaffolding, targeting the missing combined-stack
-proof rather than repeating standalone Grafeo evaluation. The current workflow
-covers Linux x64/arm64 and Windows arm64; it is not already a five-target matrix.
-Obtain approval for the exact manual platform runs and workflow changes first.
-An unresolved required-target failure blocks the inference gate and P3's
-representation commitment, not P1 or a separately proven graph gate.
+**Inference gate:** verify the combined inference/native stack locally, including
+immutable model acquisition, embedding and reranking execution, and offline cached
+operation. The existing reports prove Grafeo across targets but the combined
+inference stack only on macOS arm64. Reuse that evidence rather than repeating
+standalone Grafeo evaluation. Record a target-by-target evidence matrix; use
+additional local machines only when available and authorized. Do not dispatch
+Actions to fill gaps. The current manual workflow covers Linux x64/arm64 and
+Windows arm64; it is not already a five-target matrix.
+
+A passing local inference gate permits P3 on that host. Missing target execution
+remains explicitly unverified and blocks release, not local feature development.
+A demonstrated required-target incompatibility reopens the component decision
+before dependent representation work continues. Retain the portability risk until
+P10 obtains real target evidence; do not claim cross-compilation proves execution.
 
 Define the real-model test convention once: a dedicated ignored integration-test
-target, explicitly invoked against a prepared pinned cache in local or authorized
-manual runs. Record its exact command and cache setup when P3 introduces the
-production tests. Normal README/CI checks use deterministic inference and do not
+target, explicitly invoked against a prepared pinned cache in local runs.
+Record its exact command and cache setup when P3 introduces the
+production tests. Normal README development checks use deterministic inference and do not
 download model weights. Explicit real-model runs fail if weights are absent or
 incompatible; they must not silently skip or count as passing. P2 owns the spike
 evidence, P3 owns the first production invocation, and P4 extends it for retrieval.
@@ -242,8 +252,9 @@ add unused provider registries or a public model-preparation command.
 
 **Acceptance:** record each gate separately with commands, immutable component
 and model revisions, artifacts, dynamic dependencies, and results. The inference
-gate includes target-by-target evidence; missing execution is a blocker, not a
-pass deferred to P10. Verify local inference with networking unavailable after
+gate names the verified local host and includes target-by-target evidence;
+missing target execution is marked unverified and remains a P10 release blocker.
+Verify local inference with networking unavailable after
 cache preparation and inspect the provider path to ensure source text is never
 sent to a remote service. A blocked download is a reported blocker, not permission
 to change providers or bypass network policy. A required API failure reopens the
@@ -471,10 +482,12 @@ exact text preservation, and the same revision/index behavior as file ingestion.
 each supported target, with release-gating evidence for section 6.
 
 **Work:** extend the early integrated package proof to the actual application,
-using authorized manual platform runs. Verify bundled native dependencies,
+using available, authorized local target machines. Verify bundled native dependencies,
 pinned model acquisition/cache behavior, offline execution after acquisition,
 writer and publication locks, and clean-target execution without build tools or
-an interpreter. Preserve ordinary CI's focused scope.
+an interpreter. Do not use Actions or paid remote runners without fresh approval.
+Unavailable target machines leave an explicit release blocker; local development
+checks are not a substitute for clean-target evidence.
 
 **Acceptance:** execute the full scenario through the public binary from an
 empty store, then reopen and reproduce results. Account for every section 6
@@ -554,7 +567,7 @@ Decision ownership and deadlines:
 
 | Decision | Resolve in | Required evidence |
 | --- | --- | --- |
-| Compatible combined runtimes, immutable model revisions, embedding normalization, vector dimensions/encoding | P2 inference gate, before P3 publication | Required-target combined-stack evidence and real-model/vector checks |
+| Compatible combined runtimes, immutable model revisions, embedding normalization, vector dimensions/encoding | P2 local inference gate, before P3 publication | Local combined-stack proof, real-model/vector checks, and explicit remaining target risks |
 | Passage size and boundaries, canonical JSON/digest implementation, lexical tokenizer | P3, before writing source revisions | Golden representation tests and approved store-format treatment |
 | Candidate limits, fusion constants, rerank limit, ordering | P4, before search completion | Deterministic tests and the pinned-model relevance fixture |
 | Source, batch, passage, embedding, and JSON-input limits | First consuming packet: P1/P3, extended in P6/P9 | Boundary tests and explicit error examples |

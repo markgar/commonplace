@@ -24,6 +24,9 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-targets --all-features
 ```
 
+Run development checks locally. GitHub Actions CI is disabled to conserve
+Actions usage; enabling or dispatching workflows requires explicit approval.
+
 ## Design documents
 
 The standalone design specification is organized under
