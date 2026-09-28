@@ -214,6 +214,167 @@ fn committed_version(root: &Path) -> i64 {
     graph_snapshot::version(SqliteDatabase::read(root).unwrap().connection()).unwrap()
 }
 
+fn removal_store() -> (tempfile::TempDir, std::path::PathBuf) {
+    let (directory, root) = store();
+    let mut writer = SqliteDatabase::write(&root, Duration::ZERO).unwrap();
+    let transaction = writer.transaction().unwrap();
+    pending(&transaction);
+    let mut vector = vec![0.0; crate::providers::embeddings::EMBEDDING_DIMENSIONS];
+    vector[0] = 1.0;
+    crate::storage::documents::publish(
+        &transaction,
+        &crate::domain::documents::DocumentInput {
+            source_key: "source".into(),
+            text: "evidence".into(),
+            title: None,
+            source_type: "test".into(),
+            occurred_at: None,
+            metadata: Default::default(),
+        },
+        None,
+        Some(&crate::storage::documents::PreparedDocument {
+            ranges: vec![crate::domain::passages::PassageRange {
+                ordinal: 0,
+                start_byte: 0,
+                end_byte: 8,
+            }],
+            vectors: vec![vector],
+        }),
+        "2026-01-01T00:00:00Z",
+    )
+    .unwrap();
+    transaction
+        .execute(
+            "INSERT INTO knowledge_item_evidence VALUES (1,1),(2,1),(3,1)",
+            [],
+        )
+        .unwrap();
+    transaction.commit().unwrap();
+    drop(writer);
+    rebuild(&root, Duration::ZERO).unwrap();
+    (directory, root)
+}
+
+#[test]
+fn removal_publication_failures_rollback_indexes_evidence_and_restore_or_fail_closed() {
+    for phase in [
+        PublishPhase::BeforeBuild,
+        PublishPhase::AfterBuild,
+        PublishPhase::BetweenRenames,
+        PublishPhase::AfterActivation,
+        PublishPhase::BeforeCommit,
+        PublishPhase::BeforeRestore,
+        PublishPhase::AfterCommit,
+        PublishPhase::AfterCleanup,
+    ] {
+        let (_directory, root) = removal_store();
+        let graph = root.join("graph");
+        let before = bytes(&graph.join("current"));
+        let mut writer = SqliteDatabase::write(&root, Duration::ZERO).unwrap();
+        let transaction = writer.transaction().unwrap();
+        let removed = crate::storage::documents::remove(&transaction, "source").unwrap();
+        assert_eq!(removed.detached_evidence, 3);
+        transaction
+            .execute("UPDATE store_state SET knowledge_version=2", [])
+            .unwrap();
+        let receipt = "remove committed at knowledge_version 2 (removed doc:1 with source_key \"source\"; affected knowledge: [knowledge:1, knowledge:2, knowledge:3])";
+        let error = publish_with(
+            &root, &transaction, Duration::ZERO, receipt, crate::app::remove::RECOVERY_GUIDANCE,
+            |at, tx| {
+                if at == PublishPhase::AfterBuild {
+                    let candidate = projection::open_verified(&graph.join("candidate"), 2)?;
+                    assert_eq!(candidate.len().unwrap(), 30);
+                    assert_eq!(committed_version(&root), 1);
+                }
+                if at == phase || (phase == PublishPhase::BeforeRestore && at == PublishPhase::BeforeCommit) {
+                    if phase == PublishPhase::BeforeCommit {
+                        tx.execute_batch(
+                            "PRAGMA defer_foreign_keys=ON;
+                            INSERT INTO entity_aliases VALUES (999,'bad','2026-01-01T00:00:00Z',NULL);"
+                        ).unwrap();
+                        return Ok(());
+                    }
+                    return Err(graph_error("injected removal failure"));
+                }
+                Ok(())
+            },
+        ).unwrap_err();
+        let committed = matches!(
+            phase,
+            PublishPhase::AfterCommit | PublishPhase::AfterCleanup
+        );
+        if committed {
+            assert_eq!(error.code(), "post_commit_cleanup");
+            assert!(error.to_string().contains(receipt));
+            assert!(error.to_string().contains("Do not retry remove"));
+            assert!(error.to_string().contains("run graph rebuild"));
+            assert!(!error.to_string().contains("retry record"));
+        } else if !transaction.is_autocommit() {
+            transaction.execute_batch("ROLLBACK").unwrap();
+        }
+        if phase == PublishPhase::BeforeCommit {
+            assert!(error.to_string().contains("FOREIGN KEY constraint failed"));
+            assert!(transaction.is_autocommit());
+        }
+        drop(transaction);
+        drop(writer);
+        assert_eq!(committed_version(&root), if committed { 2 } else { 1 });
+        let session = SqliteDatabase::read(&root).unwrap();
+        for table in [
+            "documents",
+            "document_revisions",
+            "passages",
+            "passage_fts",
+            "passage_vectors",
+            "knowledge_item_evidence",
+        ] {
+            let count: i64 = session
+                .connection()
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            let expected = i64::from(!committed)
+                * if table == "knowledge_item_evidence" {
+                    3
+                } else {
+                    1
+                };
+            assert_eq!(count, expected, "{phase:?}: {table}");
+        }
+        for id in 1..=3 {
+            let knowledge = crate::storage::knowledge::knowledge(
+                session.connection(),
+                crate::domain::ids::KnowledgeItemId::new(id).unwrap(),
+            )
+            .unwrap();
+            let knowledge = serde_json::to_value(knowledge).unwrap();
+            assert_eq!(knowledge["withdrawn_at"], serde_json::Value::Null);
+            assert_eq!(
+                knowledge["support"].as_array().unwrap().len(),
+                usize::from(!committed)
+            );
+            assert_eq!(
+                knowledge["subtype"],
+                if id == 1 { "type_membership" } else { "fact" }
+            );
+        }
+        drop(session);
+        if phase == PublishPhase::BeforeRestore {
+            assert!(error.to_string().contains("restoration failed"));
+            assert!(GraphRuntime::open(&root).is_err());
+        } else {
+            GraphRuntime::open(&root).unwrap();
+            if !committed {
+                assert_eq!(bytes(&graph.join("current")), before);
+            }
+        }
+        rebuild(&root, Duration::ZERO).unwrap();
+        GraphRuntime::open(&root).unwrap();
+        assert_eq!(committed_version(&root), if committed { 2 } else { 1 });
+    }
+}
+
 #[test]
 fn coordinated_build_activation_and_real_commit_failures_restore_old_state() {
     for phase in [
@@ -229,26 +390,33 @@ fn coordinated_build_activation_and_real_commit_failures_restore_old_state() {
         let mut writer = SqliteDatabase::write(&root, Duration::ZERO).unwrap();
         let transaction = writer.transaction().unwrap();
         pending(&transaction);
-        let error = publish_with(&root, &transaction, Duration::ZERO, "receipt", |at, tx| {
-            if at == PublishPhase::AfterBuild {
-                let candidate = projection::open_verified(&graph.join("candidate"), 1)?;
-                assert_eq!(candidate.len().unwrap(), 30);
-                assert_eq!(committed_version(&root), 0);
-            }
-            if at == phase {
-                if at == PublishPhase::BeforeCommit {
-                    // Introduce the deferred violation only after successful candidate verification.
-                    tx.execute_batch(
-                        "PRAGMA defer_foreign_keys=ON;
-                        INSERT INTO entity_aliases VALUES (999,'bad','2026-01-01T00:00:00Z',NULL);",
-                    )
-                    .unwrap();
-                    return Ok(());
+        let error = publish_with(
+            &root,
+            &transaction,
+            Duration::ZERO,
+            "receipt",
+            crate::app::record::RECOVERY_GUIDANCE,
+            |at, tx| {
+                if at == PublishPhase::AfterBuild {
+                    let candidate = projection::open_verified(&graph.join("candidate"), 1)?;
+                    assert_eq!(candidate.len().unwrap(), 30);
+                    assert_eq!(committed_version(&root), 0);
                 }
-                return Err(graph_error("injected phase failure"));
-            }
-            Ok(())
-        })
+                if at == phase {
+                    if at == PublishPhase::BeforeCommit {
+                        // Introduce the deferred violation only after successful candidate verification.
+                        tx.execute_batch(
+                            "PRAGMA defer_foreign_keys=ON;
+                        INSERT INTO entity_aliases VALUES (999,'bad','2026-01-01T00:00:00Z',NULL);",
+                        )
+                        .unwrap();
+                        return Ok(());
+                    }
+                    return Err(graph_error("injected phase failure"));
+                }
+                Ok(())
+            },
+        )
         .unwrap_err();
         if phase == PublishPhase::BeforeCommit {
             assert!(
@@ -285,6 +453,7 @@ fn commit_restoration_failure_is_explicit_and_fail_closed() {
         &transaction,
         Duration::ZERO,
         "receipt",
+        crate::app::record::RECOVERY_GUIDANCE,
         |phase, _| {
             if matches!(
                 phase,
@@ -318,6 +487,7 @@ fn all_post_commit_cleanup_errors_preserve_committed_receipt_and_current() {
             &transaction,
             Duration::ZERO,
             "record committed at knowledge_version 1 (entity:1, knowledge:1, knowledge:2, knowledge:3)",
+            crate::app::record::RECOVERY_GUIDANCE,
             |at, _| {
                 if at == phase {
                     return Err(graph_error("injected cleanup/sync failure"));
@@ -401,12 +571,19 @@ fn publication_crash_child() {
     let mut writer = SqliteDatabase::write(&root, Duration::ZERO).unwrap();
     let transaction = writer.transaction().unwrap();
     pending(&transaction);
-    publish_with(&root, &transaction, Duration::ZERO, "receipt", |at, _| {
-        if format!("{at:?}") == phase {
-            std::process::exit(77);
-        }
-        Ok(())
-    })
+    publish_with(
+        &root,
+        &transaction,
+        Duration::ZERO,
+        "receipt",
+        crate::app::record::RECOVERY_GUIDANCE,
+        |at, _| {
+            if format!("{at:?}") == phase {
+                std::process::exit(77);
+            }
+            Ok(())
+        },
+    )
     .unwrap();
     panic!("expected exit phase");
 }

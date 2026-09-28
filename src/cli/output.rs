@@ -32,6 +32,8 @@ pub enum CommandResult {
     Search(crate::domain::search::SearchResult),
     Record(crate::app::record::RecordResult),
     RecordDescription(super::record::Description),
+    Remove(crate::app::remove::RemoveResult),
+    RemoveDescription(Box<super::remove::Description>),
 }
 
 impl CommandResponse {

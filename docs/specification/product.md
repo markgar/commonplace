@@ -210,6 +210,10 @@ Removal is explicit:
 commonplace remove --source-key notes/obsolete.md
 ```
 
+The argument is an exact opaque stored key, not a path to resolve. For a
+file-ingested document, copy its canonical `file://` source key from `get`;
+removal does not normalize keys or delete the original file.
+
 The command permanently deletes one document, all of its revisions and
 passages, lexical and vector rows, and evidence links. It reports detached
 evidence counts and affected knowledge IDs, rebuilds the graph, and publishes

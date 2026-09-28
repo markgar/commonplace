@@ -99,8 +99,16 @@ pub(crate) fn publish(
     transaction: &Transaction<'_>,
     timeout: Duration,
     receipt: &str,
+    recovery_guidance: &str,
 ) -> Result<()> {
-    publish_with(root, transaction, timeout, receipt, |_, _| Ok(()))
+    publish_with(
+        root,
+        transaction,
+        timeout,
+        receipt,
+        recovery_guidance,
+        |_, _| Ok(()),
+    )
 }
 
 fn publish_with(
@@ -108,6 +116,7 @@ fn publish_with(
     transaction: &Transaction<'_>,
     timeout: Duration,
     receipt: &str,
+    recovery_guidance: &str,
     mut hook: impl FnMut(PublishPhase, &Transaction<'_>) -> Result<()>,
 ) -> Result<()> {
     let graph = root.join("graph");
@@ -197,9 +206,12 @@ fn publish_with(
         hook(PublishPhase::AfterCleanup, transaction)?;
         sync_directory(&graph)
     })();
-    cleanup.map_err(|error| CommonplaceError::PostCommitCleanup(format!(
-            "{receipt}; graph cleanup failed: {error}. Do not retry record; inspect these IDs with get and run graph rebuild."
-        )))
+    cleanup.map_err(|error| {
+        CommonplaceError::PostCommitCleanup(format!(
+            "{receipt}; graph cleanup failed: {error}. {} and run graph rebuild.",
+            recovery_guidance.trim_end_matches('.')
+        ))
+    })
 }
 
 fn discard_candidate(graph: &Path, error: CommonplaceError) -> Result<()> {

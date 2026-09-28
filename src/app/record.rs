@@ -14,6 +14,8 @@ use crate::storage::{
 };
 use crate::{CommonplaceError, Result};
 
+pub(crate) const RECOVERY_GUIDANCE: &str = "Do not retry record; inspect these IDs with get.";
+
 #[derive(Debug, Default, Serialize)]
 pub struct Summary {
     pub items: usize,
@@ -276,7 +278,13 @@ pub fn record(root: &Path, input: RecordInput, timeout: Duration) -> Result<Reco
             ids.join(", ")
         );
         if projected_change {
-            crate::graph::publish(root, &transaction, timeout, &result.receipt)?;
+            crate::graph::publish(
+                root,
+                &transaction,
+                timeout,
+                &result.receipt,
+                RECOVERY_GUIDANCE,
+            )?;
         } else {
             transaction.execute_batch("COMMIT").map_err(storage_error)?;
         }

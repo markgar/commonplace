@@ -2,6 +2,7 @@ mod ingest;
 mod input;
 mod output;
 mod record;
+mod remove;
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -55,6 +56,8 @@ enum Command {
     },
     /// Atomically record entities, metadata, cited types and facts from JSON or JSONL.
     Record(record::RecordArgs),
+    /// Permanently delete one source's stored evidence, retaining authored knowledge and source files.
+    Remove(remove::RemoveArgs),
     /// Read document metadata, revision text, or an exact passage, entity, or knowledge item.
     Get { id: String },
     /// Apply or inspect your vocabulary (entity types, predicates, and identifiers).
@@ -103,8 +106,13 @@ pub fn main() -> ExitCode {
     let operation = cli.command.operation();
 
     match execute(cli) {
-        Ok(response) if matches!(&response.result, CommandResult::Record(_)) => {
-            match write_record_response(&response, &mut std::io::stdout().lock()) {
+        Ok(response)
+            if matches!(
+                &response.result,
+                CommandResult::Record(_) | CommandResult::Remove(_)
+            ) =>
+        {
+            match write_committed_response(&response, &mut std::io::stdout().lock()) {
                 Ok(()) => ExitCode::from(response.exit_code()),
                 Err(error) => {
                     let error = ErrorResponse::new(operation, &error);
@@ -138,11 +146,15 @@ pub fn main() -> ExitCode {
     }
 }
 
-fn write_record_response(response: &CommandResponse, output: &mut impl Write) -> Result<()> {
-    let CommandResult::Record(record) = &response.result else {
-        return Err(crate::CommonplaceError::Storage(
-            "expected record response".into(),
-        ));
+fn write_committed_response(response: &CommandResponse, output: &mut impl Write) -> Result<()> {
+    let (receipt, guidance) = match &response.result {
+        CommandResult::Record(record) => (&record.receipt, crate::app::record::RECOVERY_GUIDANCE),
+        CommandResult::Remove(removed) => (&removed.receipt, crate::app::remove::RECOVERY_GUIDANCE),
+        _ => {
+            return Err(crate::CommonplaceError::Storage(
+                "expected committed record or remove response".into(),
+            ));
+        }
     };
     let write = (|| -> std::result::Result<(), Box<dyn std::error::Error>> {
         let json = serde_json::to_vec_pretty(response)?;
@@ -151,10 +163,11 @@ fn write_record_response(response: &CommandResponse, output: &mut impl Write) ->
         output.flush()?;
         Ok(())
     })();
-    write.map_err(|error| crate::CommonplaceError::Storage(format!(
-        "{}; response delivery failed: {error}. Do not retry record; inspect these IDs with get.",
-        record.receipt
-    )))
+    write.map_err(|error| {
+        crate::CommonplaceError::Storage(format!(
+            "{receipt}; response delivery failed: {error}. {guidance}"
+        ))
+    })
 }
 
 fn execute(cli: Cli) -> Result<CommandResponse> {
@@ -215,6 +228,7 @@ fn execute(cli: Cli) -> Result<CommandResponse> {
             ))
         }
         Command::Record(args) => record::execute(&cli.store, args),
+        Command::Remove(args) => remove::execute(&cli.store, args),
         Command::Get { id } => Ok(CommandResponse::new(
             "get",
             "complete",
@@ -287,6 +301,8 @@ impl Command {
             Self::Get { .. } => "get",
             Self::Record(args) if args.describe => "record.describe",
             Self::Record(_) => "record",
+            Self::Remove(args) if args.describe => "remove.describe",
+            Self::Remove(_) => "remove",
             Self::Schema {
                 command: SchemaCommand::Show,
             } => "schema.show",
@@ -333,7 +349,7 @@ mod tests {
         );
         for flush in [false, true] {
             let error =
-                super::write_record_response(&response, &mut FailingOutput(flush)).unwrap_err();
+                super::write_committed_response(&response, &mut FailingOutput(flush)).unwrap_err();
             assert_eq!(error.code(), "internal_error");
             assert!(
                 error
@@ -342,6 +358,49 @@ mod tests {
             );
             assert!(error.to_string().contains("Do not retry record"));
             assert!(!error.to_string().contains("cleanup"));
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("store");
+        let source = directory.path().join("empty.txt");
+        std::fs::write(&source, "").unwrap();
+        let run = |args: &[&str]| {
+            execute(
+                Cli::try_parse_from(
+                    ["commonplace", "--store", root.to_str().unwrap()]
+                        .into_iter()
+                        .chain(args.iter().copied()),
+                )
+                .unwrap(),
+            )
+            .unwrap()
+        };
+        run(&["init"]);
+        let ingested = run(&["ingest", source.to_str().unwrap()]);
+        let super::CommandResult::Ingest(ingested) = ingested.result else {
+            panic!("ingest");
+        };
+        let key = ingested.items[0].source_key.as_deref().unwrap();
+        let response = run(&["remove", "--source-key", key]);
+        for flush in [false, true] {
+            let error =
+                super::write_committed_response(&response, &mut FailingOutput(flush)).unwrap_err();
+            assert_eq!(error.code(), "internal_error");
+            assert!(
+                error
+                    .to_string()
+                    .contains("remove committed at knowledge_version 1")
+            );
+            assert!(error.to_string().contains("removed doc:1"));
+            assert!(error.to_string().contains(key));
+            assert!(error.to_string().contains("Do not retry remove"));
+            assert!(error.to_string().contains("not_found"));
+            assert!(!error.to_string().contains("record"));
+            assert!(!error.to_string().contains("rebuild"));
+            assert_eq!(
+                crate::app::get::get(&root, "doc:1").unwrap_err().code(),
+                "not_found"
+            );
+            crate::graph::GraphRuntime::open(&root).unwrap();
         }
     }
 

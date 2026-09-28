@@ -8,7 +8,8 @@ queries.
 
 The Rust implementation supports store initialization, additive vocabulary,
 file and generic stdin/JSONL ingestion, hybrid search, atomic cited entity/type/fact
-authoring, authoritative reads, and read-only RDF graph queries and rebuild:
+authoring, explicit source removal, authoritative reads, and read-only RDF graph
+queries and rebuild:
 
 ```sh
 cargo run --bin commonplace -- --store .commonplace init
@@ -212,6 +213,65 @@ Their messages identify committed IDs/version and say not to retry `record`;
 inspect those IDs with `get`, and rebuild for cleanup failures. If the process or
 output stream dies, receipt delivery cannot be guaranteed: inspect canonical
 state before retrying a non-idempotent request.
+
+## Explicit source removal
+
+```sh
+cargo run --bin commonplace -- remove --describe --json
+cargo run --bin commonplace -- --store .commonplace get doc:1
+cargo run --bin commonplace -- --store .commonplace remove --source-key 'opaque:key' --json
+```
+
+Use the **exact stored source key** returned by `get`. File ingestion uses a
+canonical `file://` URL; removal never resolves paths, normalizes URLs, trims
+whitespace, or expands patterns. Keys must be nonempty and contain no NUL.
+`--describe` generates a schema/example for the CLI argument object and a typed
+output example without opening a store or loading models. It is **not a JSON
+input mode** and cannot be combined with `--source-key`.
+
+Removal permanently deletes that document, **all** revisions and passages,
+lexical/vector index rows, and evidence links. It does not delete original source
+files or remove/withdraw authored knowledge, entities, or vocabulary. Affected
+active knowledge remains readable and projected, possibly with `support: []`;
+unrelated evidence remains unchanged. Directory scan absence never removes a
+source. There is no batch removal, restore, or tombstone. Reingesting the same
+key creates a new document identity and does not reattach old citations.
+
+```json
+{
+  "operation": "remove",
+  "contract_version": "1",
+  "status": "complete",
+  "result": {
+    "source_key": "opaque:key",
+    "document_id": "doc:1",
+    "deleted_revisions": 2,
+    "deleted_passages": 3,
+    "detached_evidence": 4,
+    "affected_knowledge_ids": ["knowledge:1", "knowledge:2"],
+    "knowledge_version": 2
+  }
+}
+```
+
+`detached_evidence` counts deleted knowledge/passage link rows across all
+revisions. Affected knowledge IDs are distinct and numerically sorted, including
+already-withdrawn items whose links were removed; withdrawal state is unchanged.
+Each successful removal increments `knowledge_version` once, including removal
+of an uncited or empty source. Unknown or already-removed keys return `not_found`
+(exit 2) without mutation. Deleted document/revision/passage IDs return
+`not_found` from `get` and cannot appear in search.
+
+Removal uses the same coordinated publication as record. Before-commit failures
+roll back the deletion; reported commit failure also restores the previous graph.
+Restoration failure is explicit, and crash-window graph mismatches fail closed
+until `graph rebuild`. **A nonzero exit may follow a successful commit:** cleanup
+or final-sync errors use `post_commit_cleanup`, and response delivery errors use
+`internal_error`. Their receipt identifies the removed document/key, affected
+knowledge IDs, and committed version. Do not blindly retry `remove`: verify the
+removed document is `not_found` and inspect affected knowledge with `get`; run
+`graph rebuild` for cleanup failures. Process/output-stream death can prevent
+receipt delivery, so inspect canonical state before retrying.
 
 ## Graph queries and explicit rebuild
 
@@ -548,6 +608,12 @@ FTS/vector IDs on a version-2 store. It verifies ingestion leaves graph files
 unchanged, then records a multiply-typed entity, cited relationship and literal
 decision through the public CLI, compares old/new passage citations with exact
 reads, and repeats after rebuild/reopen.
+It then removes that multiply revised source by its exact stored file key,
+checks full canonical/index/evidence deletion, retained empty/mixed membership,
+relationship and literal-fact
+support and unrelated citations, public search exclusion, graph/reopen parity,
+and new document identity on reingestion. All sources used are fresh temporary
+test files.
 The stream check runs real
 nonempty stdin/JSONL submissions, unchanged and metadata-only reruns, partial
 failures, exact old reads, and current index/unchanged graph checks. The file
