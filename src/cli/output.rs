@@ -1,7 +1,10 @@
 use serde::Serialize;
 
+use super::input::Description;
 use crate::CommonplaceError;
 use crate::app::init::InitResult;
+use crate::app::schema::ApplyResult;
+use crate::domain::schema::Vocabulary;
 
 const CONTRACT_VERSION: &str = "1";
 
@@ -10,10 +13,28 @@ pub struct CommandResponse {
     pub operation: &'static str,
     pub contract_version: &'static str,
     pub status: &'static str,
-    pub result: InitResult,
+    pub result: CommandResult,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub enum CommandResult {
+    Init(InitResult),
+    Apply(ApplyResult),
+    Vocabulary(Vocabulary),
+    Description(Description),
 }
 
 impl CommandResponse {
+    pub fn new(operation: &'static str, status: &'static str, result: CommandResult) -> Self {
+        Self {
+            operation,
+            contract_version: CONTRACT_VERSION,
+            status,
+            result,
+        }
+    }
+
     pub fn init(result: InitResult) -> Self {
         Self {
             operation: "init",
@@ -23,7 +44,7 @@ impl CommandResponse {
             } else {
                 "unchanged"
             },
-            result,
+            result: CommandResult::Init(result),
         }
     }
 }

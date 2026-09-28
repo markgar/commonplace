@@ -1,8 +1,12 @@
+use std::fs::{File, OpenOptions};
 use std::path::Path;
 use std::sync::Once;
+use std::time::{Duration, Instant};
 
 use rusqlite::ffi::sqlite3_auto_extension;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{
+    Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior, params,
+};
 use sqlite_vec::sqlite3_vec_init;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -21,9 +25,36 @@ type SqliteExtensionEntry = unsafe extern "C" fn(
 
 pub struct SqliteDatabase;
 
+pub struct SqliteReadSession {
+    connection: Connection,
+}
+
+impl SqliteReadSession {
+    pub fn connection(&self) -> &Connection {
+        &self.connection
+    }
+}
+
+pub struct SqliteWriteSession {
+    connection: Connection,
+    // Keep the lock until the connection (and any transaction) has closed.
+    _lock: File,
+}
+
+impl SqliteWriteSession {
+    pub fn transaction(&mut self) -> Result<Transaction<'_>> {
+        self.connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage_error)
+    }
+}
+
 impl SqliteDatabase {
     pub fn initialize(path: &Path) -> Result<()> {
-        let mut connection = open_connection(path)?;
+        let mut connection = open_connection(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE,
+        )?;
         connection
             .pragma_update(None, "journal_mode", "WAL")
             .map_err(storage_error)?;
@@ -50,6 +81,55 @@ impl SqliteDatabase {
     }
 
     pub fn validate(path: &Path) -> Result<()> {
+        Self::read_database(path).map(|_| ())
+    }
+
+    pub fn read(root: &Path) -> Result<SqliteReadSession> {
+        super::StoreConfig::validate(root)?;
+        Self::read_database(&root.join("commonplace.sqlite3"))
+    }
+
+    pub fn write(root: &Path, lock_timeout: Duration) -> Result<SqliteWriteSession> {
+        // Validate before creating operational lock state or opening a writable handle.
+        drop(Self::read(root)?);
+        let lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(root.join("writer.lock"))?;
+        let start = Instant::now();
+        loop {
+            match lock.try_lock() {
+                Ok(()) => break,
+                Err(std::fs::TryLockError::WouldBlock) if start.elapsed() < lock_timeout => {
+                    std::thread::sleep(
+                        Duration::from_millis(10).min(lock_timeout.saturating_sub(start.elapsed())),
+                    );
+                }
+                Err(std::fs::TryLockError::WouldBlock) => {
+                    return Err(CommonplaceError::Conflict(
+                        "store writer is busy; retry the operation".into(),
+                    ));
+                }
+                Err(std::fs::TryLockError::Error(error)) => return Err(error.into()),
+            }
+        }
+        let connection = open_connection(
+            &root.join("commonplace.sqlite3"),
+            OpenFlags::SQLITE_OPEN_READ_WRITE,
+        )?;
+        connection
+            .busy_timeout(lock_timeout)
+            .map_err(storage_error)?;
+        validate_connection(&connection)?;
+        Ok(SqliteWriteSession {
+            connection,
+            _lock: lock,
+        })
+    }
+
+    fn read_database(path: &Path) -> Result<SqliteReadSession> {
         if !path.is_file() {
             return Err(CommonplaceError::Conflict(format!(
                 "initialized store is missing its database: {}",
@@ -57,46 +137,91 @@ impl SqliteDatabase {
             )));
         }
 
-        let connection = open_connection(path)?;
-        let state = connection
-            .query_row(
-                "SELECT format, schema_version, knowledge_version
-                 FROM store_state
-                 WHERE singleton = 1",
-                [],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, i64>(1)?,
-                        row.get::<_, i64>(2)?,
-                    ))
-                },
-            )
-            .optional()
+        let connection = open_connection(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        connection
+            .execute_batch("BEGIN DEFERRED")
             .map_err(storage_error)?;
-
-        let Some((format, schema_version, knowledge_version)) = state else {
-            return Err(CommonplaceError::Conflict(
-                "database has no store_state row".to_owned(),
-            ));
-        };
-        if format != STORE_FORMAT {
-            return Err(CommonplaceError::Conflict(format!(
-                "unsupported store format {format:?}; expected {STORE_FORMAT:?}"
-            )));
-        }
-        if schema_version < 0 || knowledge_version < 0 {
-            return Err(CommonplaceError::Conflict(
-                "database contains invalid version counters".to_owned(),
-            ));
-        }
-        Ok(())
+        validate_connection(&connection)?;
+        Ok(SqliteReadSession { connection })
     }
 }
 
-fn open_connection(path: &Path) -> Result<Connection> {
+fn validate_connection(connection: &Connection) -> Result<()> {
+    let state = connection
+        .query_row(
+            "SELECT format, schema_version, knowledge_version
+                 FROM store_state
+                 WHERE singleton = 1",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+
+    let Some((format, schema_version, knowledge_version)) = state else {
+        return Err(CommonplaceError::Conflict(
+            "database has no store_state row".to_owned(),
+        ));
+    };
+    if format != STORE_FORMAT {
+        return Err(CommonplaceError::Conflict(format!(
+            "unsupported store format {format:?}; expected {STORE_FORMAT:?}"
+        )));
+    }
+    if schema_version < 0 || knowledge_version < 0 {
+        return Err(CommonplaceError::Conflict(
+            "database contains invalid version counters".to_owned(),
+        ));
+    }
+    let journal_mode: String = connection
+        .pragma_query_value(None, "journal_mode", |row| row.get(0))
+        .map_err(storage_error)?;
+    if journal_mode != "wal" {
+        return Err(CommonplaceError::Conflict(
+            "store must use WAL journal mode".into(),
+        ));
+    }
+    let vec_version: String = connection
+        .query_row("SELECT vec_version()", [], |row| row.get(0))
+        .map_err(storage_error)?;
+    if vec_version != "v0.1.6" {
+        return Err(CommonplaceError::Conflict(format!(
+            "unsupported sqlite-vec version {vec_version}"
+        )));
+    }
+    for (table, module) in [("passage_fts", "fts5"), ("passage_vectors", "vec0")] {
+        let sql: Option<String> = connection
+            .query_row(
+                "SELECT sql FROM sqlite_schema WHERE name = ?1 AND type = 'table'",
+                [table],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(storage_error)?;
+        if !sql.is_some_and(|sql| sql.contains(&format!("USING {module}("))) {
+            return Err(CommonplaceError::Conflict(format!(
+                "missing required {module} index"
+            )));
+        }
+        connection
+            .prepare(&format!("SELECT * FROM {table} LIMIT 0"))
+            .map_err(storage_error)?;
+    }
+    Ok(())
+}
+
+fn open_connection(path: &Path, flags: OpenFlags) -> Result<Connection> {
     register_sqlite_vec();
-    let connection = Connection::open(path).map_err(storage_error)?;
+    let connection = Connection::open_with_flags(path, flags).map_err(storage_error)?;
+    connection
+        .busy_timeout(Duration::ZERO)
+        .map_err(storage_error)?;
     connection
         .pragma_update(None, "foreign_keys", true)
         .map_err(storage_error)?;
@@ -117,8 +242,13 @@ fn register_sqlite_vec() {
     });
 }
 
-fn storage_error(error: rusqlite::Error) -> CommonplaceError {
-    CommonplaceError::Storage(error.to_string())
+pub(crate) fn storage_error(error: rusqlite::Error) -> CommonplaceError {
+    match error.sqlite_error_code() {
+        Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked) => {
+            CommonplaceError::Conflict("database is busy; retry the operation".into())
+        }
+        _ => CommonplaceError::Storage(error.to_string()),
+    }
 }
 
 #[cfg(test)]
