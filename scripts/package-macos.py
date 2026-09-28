@@ -180,6 +180,23 @@ def main():
             f'export COMMONPLACE_MODEL_CACHE="$HOME/.local/share/commonplace/releases/{name}/pinned-models"\n'
             'store="$HOME/.local/share/commonplace/stores/personal"\n'
             'commonplace --store "$store" init\n\n'
+            "Or deliberately create the optional user path defaults once:\n\n"
+            'config="$HOME/Library/Application Support/commonplace/config.json"\n'
+            'store="$HOME/.local/share/commonplace/stores/personal"\n'
+            'mkdir -p "$(dirname "$config")"\n'
+            'tmp="$config.tmp"\n'
+            'cat > "$tmp" <<EOF\n'
+            '{\n'
+            '  "format": "commonplace-user-config/1",\n'
+            '  "store": "$store",\n'
+            '  "model_cache": "$release_dir/pinned-models"\n'
+            '}\n'
+            'EOF\n'
+            'mv "$tmp" "$config"\n'
+            'commonplace config show\n'
+            'commonplace init\n\n'
+            "The package and install commands do not write this user-owned file.\n"
+            "It is distinct from the selected store's backend-managed config.json.\n"
             "Keep the store outside the release directory. Installation neither copies nor removes stores.\n"
             "Retain the archive, checksum and provenance. Do not overwrite an installation implicitly.\n"
             "Use --help and the repository README for other public commands.\n"

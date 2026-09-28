@@ -69,7 +69,7 @@ fn absent_store_is_not_created() {
         vec!["schema", "show"],
         vec!["schema", "apply", "--describe"],
     ] {
-        let output = std::process::Command::new(env!("CARGO_BIN_EXE_commonplace"))
+        let output = common::isolated_command(env!("CARGO_BIN_EXE_commonplace"), directory.path())
             .arg("--store")
             .arg(&root)
             .args(&arguments)

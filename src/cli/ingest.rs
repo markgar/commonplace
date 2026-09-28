@@ -165,7 +165,11 @@ impl IngestArgs {
     }
 }
 
-pub(super) fn execute(root: &Path, args: IngestArgs) -> Result<CommandResponse> {
+pub(super) fn execute(
+    root: &Path,
+    model_cache: Option<PathBuf>,
+    args: IngestArgs,
+) -> Result<CommandResponse> {
     if args.describe {
         let example_args = IngestArgs {
             paths: vec![PathBuf::from("notes.md")],
@@ -205,10 +209,7 @@ pub(super) fn execute(root: &Path, args: IngestArgs) -> Result<CommandResponse> 
         ));
     }
     let (config, metadata) = args.options()?;
-    let mut model = LocalEmbeddingModel::new(
-        std::env::var_os("COMMONPLACE_MODEL_CACHE").map(PathBuf::from),
-        config.embedding_batch_size,
-    );
+    let mut model = LocalEmbeddingModel::new(model_cache, config.embedding_batch_size);
     let result = if args.stdin {
         let source_key = args.source_key.ok_or_else(|| {
             CommonplaceError::InvalidInput("--stdin requires --source-key".into())
