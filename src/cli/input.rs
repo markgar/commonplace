@@ -44,21 +44,30 @@ pub fn read(path: &Path, maximum_bytes: usize) -> Result<SchemaInput> {
 }
 
 fn parse(reader: impl Read, maximum_bytes: usize) -> Result<SchemaInput> {
-    let mut bytes = Vec::new();
-    reader
-        .take(maximum_bytes.saturating_add(1) as u64)
-        .read_to_end(&mut bytes)?;
-    if bytes.len() > maximum_bytes {
-        return Err(CommonplaceError::LimitExceeded(format!(
-            "schema input exceeds the {maximum_bytes}-byte limit"
-        )));
-    }
+    let bytes = read_bounded(reader, maximum_bytes, "schema")?;
     let value: Value = serde_json::from_slice(&bytes)
         .map_err(|error| CommonplaceError::InvalidInput(error.to_string()))?;
     validate(&value, &generated_schema::<SchemaInput>())?;
     // Decode the original bytes so duplicate JSON fields are not silently collapsed.
     serde_json::from_slice(&bytes)
         .map_err(|error| CommonplaceError::InvalidInput(error.to_string()))
+}
+
+pub(super) fn read_bounded(
+    reader: impl Read,
+    maximum_bytes: usize,
+    operation: &str,
+) -> Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    reader
+        .take(maximum_bytes.saturating_add(1) as u64)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > maximum_bytes {
+        return Err(CommonplaceError::LimitExceeded(format!(
+            "{operation} input exceeds the {maximum_bytes}-byte limit"
+        )));
+    }
+    Ok(bytes)
 }
 
 #[cfg(test)]

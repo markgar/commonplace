@@ -200,3 +200,187 @@ fn result_snapshot_outlives_native_store_but_not_publication_lease() {
     drop(lease);
     contender.try_lock().unwrap();
 }
+
+fn pending(transaction: &Transaction<'_>) {
+    transaction.execute_batch(
+        "INSERT INTO entity_types VALUES (1,'person',NULL,1);
+         INSERT INTO entities VALUES (1,'Pending','2026-01-01T00:00:00Z',NULL);
+         INSERT INTO knowledge_items VALUES (1,'type_membership',1,'2026-01-01T00:00:00Z',NULL,NULL,NULL);
+         INSERT INTO entity_type_memberships VALUES (1,1,1);
+         UPDATE store_state SET schema_version=1,knowledge_version=1;"
+    ).unwrap();
+}
+
+fn committed_version(root: &Path) -> i64 {
+    graph_snapshot::version(SqliteDatabase::read(root).unwrap().connection()).unwrap()
+}
+
+#[test]
+fn coordinated_build_activation_and_real_commit_failures_restore_old_state() {
+    for phase in [
+        PublishPhase::BeforeBuild,
+        PublishPhase::AfterBuild,
+        PublishPhase::BetweenRenames,
+        PublishPhase::AfterActivation,
+        PublishPhase::BeforeCommit,
+    ] {
+        let (_directory, root) = store();
+        let graph = root.join("graph");
+        let before = bytes(&graph.join("current"));
+        let mut writer = SqliteDatabase::write(&root, Duration::ZERO).unwrap();
+        let transaction = writer.transaction().unwrap();
+        pending(&transaction);
+        let error = publish_with(&root, &transaction, Duration::ZERO, "receipt", |at, tx| {
+            if at == PublishPhase::AfterBuild {
+                let candidate = projection::open_verified(&graph.join("candidate"), 1)?;
+                assert_eq!(candidate.len().unwrap(), 10);
+                assert_eq!(committed_version(&root), 0);
+            }
+            if at == phase {
+                if at == PublishPhase::BeforeCommit {
+                    // Introduce the deferred violation only after successful candidate verification.
+                    tx.execute_batch(
+                        "PRAGMA defer_foreign_keys=ON;
+                        INSERT INTO entity_aliases VALUES (999,'bad','2026-01-01T00:00:00Z',NULL);",
+                    )
+                    .unwrap();
+                    return Ok(());
+                }
+                return Err(graph_error("injected phase failure"));
+            }
+            Ok(())
+        })
+        .unwrap_err();
+        if phase == PublishPhase::BeforeCommit {
+            assert!(
+                error.to_string().contains("FOREIGN KEY constraint failed"),
+                "{error}"
+            );
+            assert!(transaction.is_autocommit());
+        }
+        drop(transaction);
+        drop(writer);
+        assert_eq!(committed_version(&root), 0);
+        assert_eq!(bytes(&graph.join("current")), before);
+        assert!(!graph.join("candidate").exists());
+        assert!(!graph.join("previous").exists());
+        GraphRuntime::open(&root).unwrap();
+    }
+}
+
+#[test]
+fn commit_restoration_failure_is_explicit_and_fail_closed() {
+    let (_directory, root) = store();
+    let mut writer = SqliteDatabase::write(&root, Duration::ZERO).unwrap();
+    let transaction = writer.transaction().unwrap();
+    pending(&transaction);
+    let error = publish_with(
+        &root,
+        &transaction,
+        Duration::ZERO,
+        "receipt",
+        |phase, _| {
+            if matches!(
+                phase,
+                PublishPhase::BeforeCommit | PublishPhase::BeforeRestore
+            ) {
+                return Err(graph_error("injected commit or restoration failure"));
+            }
+            Ok(())
+        },
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("restoration failed"));
+    assert!(transaction.is_autocommit());
+    drop(transaction);
+    drop(writer);
+    assert_eq!(committed_version(&root), 0);
+    assert!(GraphRuntime::open(&root).is_err());
+    rebuild(&root, Duration::ZERO).unwrap();
+    GraphRuntime::open(&root).unwrap();
+}
+
+#[test]
+fn all_post_commit_cleanup_errors_preserve_committed_receipt_and_current() {
+    for phase in [PublishPhase::AfterCommit, PublishPhase::AfterCleanup] {
+        let (_directory, root) = store();
+        let mut writer = SqliteDatabase::write(&root, Duration::ZERO).unwrap();
+        let transaction = writer.transaction().unwrap();
+        pending(&transaction);
+        let error = publish_with(
+            &root,
+            &transaction,
+            Duration::ZERO,
+            "record committed at knowledge_version 1 (entity:1, knowledge:1)",
+            |at, _| {
+                if at == phase {
+                    return Err(graph_error("injected cleanup/sync failure"));
+                }
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.code(), "post_commit_cleanup");
+        assert!(
+            error
+                .to_string()
+                .contains("knowledge_version 1 (entity:1, knowledge:1)")
+        );
+        assert!(error.to_string().contains("Do not retry record"));
+        assert!(transaction.is_autocommit());
+        drop(transaction);
+        drop(writer);
+        assert_eq!(committed_version(&root), 1);
+        GraphRuntime::open(&root).unwrap();
+        rebuild(&root, Duration::ZERO).unwrap();
+        assert_eq!(committed_version(&root), 1);
+    }
+}
+
+#[test]
+fn actual_process_exit_windows_fail_closed_and_rebuild_only_committed_state() {
+    for phase in ["BetweenRenames", "AfterActivation", "AfterCommit"] {
+        let (_directory, root) = store();
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--ignored",
+                "--exact",
+                "graph::runtime::tests::publication_crash_child",
+            ])
+            .env("COMMONPLACE_CRASH_STORE", &root)
+            .env("COMMONPLACE_CRASH_PHASE", phase)
+            .status()
+            .unwrap();
+        assert_eq!(status.code(), Some(77));
+        let committed = phase == "AfterCommit";
+        assert_eq!(committed_version(&root), i64::from(committed));
+        assert_eq!(GraphRuntime::open(&root).is_ok(), committed);
+        rebuild(&root, Duration::ZERO).unwrap();
+        assert_eq!(committed_version(&root), i64::from(committed));
+        let graph = GraphRuntime::open(&root).unwrap();
+        let result = graph
+            .query("SELECT ?s WHERE {?s ?p ?o}", QueryConfig::default())
+            .unwrap();
+        assert_eq!(result.rows.is_empty(), !committed);
+        assert!(!root.join("graph/previous").exists());
+        assert!(!root.join("graph/candidate").exists());
+    }
+}
+
+#[test]
+#[ignore = "child helper explicitly invoked by process-crash test"]
+fn publication_crash_child() {
+    let root = std::path::PathBuf::from(std::env::var_os("COMMONPLACE_CRASH_STORE").unwrap());
+    let phase = std::env::var("COMMONPLACE_CRASH_PHASE").unwrap();
+    let mut writer = SqliteDatabase::write(&root, Duration::ZERO).unwrap();
+    let transaction = writer.transaction().unwrap();
+    pending(&transaction);
+    publish_with(&root, &transaction, Duration::ZERO, "receipt", |at, _| {
+        if format!("{at:?}") == phase {
+            std::process::exit(77);
+        }
+        Ok(())
+    })
+    .unwrap();
+    panic!("expected exit phase");
+}
