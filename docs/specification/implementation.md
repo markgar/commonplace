@@ -533,7 +533,11 @@ not completion of an otherwise accepted feature packet.
   assign additional agents only bounded independent work with a concrete
   acceptance result. Do not keep speculative implementation branches running
   ahead of unresolved dependencies.
-- Before coding a packet, approve its concrete public input/output examples and
+- Before coding a packet, obtain an independent `rubber-duck` agent review of its
+  plan against the existing code and owning specifications. Resolve blocking
+  findings and record dispositions using the repo-local
+  [`commonplace-progress` skill](../../.github/skills/commonplace-progress/SKILL.md).
+  The coordinator then approves the concrete public input/output examples and
   any durable-format implications. Intermediate command descriptions advertise
   only implemented forms; no successful placeholder responses or fallback paths.
 - Implement domain rules, persistence, CLI wiring, and focused tests together.
