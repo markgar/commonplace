@@ -389,31 +389,87 @@ pub(crate) fn stored_object(
 }
 
 pub(crate) fn invalid_active_endpoint(db: &Connection) -> Result<Option<KnowledgeItemId>> {
+    invalid_endpoint_excluding(db, &[])
+}
+
+fn invalid_endpoint_excluding(
+    db: &Connection,
+    excluded: &[KnowledgeItemId],
+) -> Result<Option<KnowledgeItemId>> {
+    let excluded =
+        serde_json::to_string(&excluded.iter().map(|id| id.value()).collect::<Vec<_>>())?;
     db.query_row(
-        "SELECT f.knowledge_item_id FROM facts f
+        "WITH excluded AS (SELECT value AS id FROM json_each(?1))
+         SELECT f.knowledge_item_id FROM facts f
          JOIN knowledge_items k USING(knowledge_item_id)
          JOIN predicates p USING(predicate_id)
-         WHERE k.withdrawn_at IS NULL AND (
+         WHERE k.withdrawn_at IS NULL
+           AND k.knowledge_item_id NOT IN (SELECT id FROM excluded) AND (
            NOT EXISTS (
              SELECT 1 FROM entity_type_memberships m
              JOIN knowledge_items mk USING(knowledge_item_id)
              JOIN predicate_entity_types e USING(entity_type_id)
              WHERE m.entity_id=f.subject_entity_id AND mk.withdrawn_at IS NULL
+               AND mk.knowledge_item_id NOT IN (SELECT id FROM excluded)
                AND e.predicate_id=f.predicate_id AND e.role='subject')
            OR (p.object_kind='entity' AND NOT EXISTS (
              SELECT 1 FROM entity_type_memberships m
              JOIN knowledge_items mk USING(knowledge_item_id)
              JOIN predicate_entity_types e USING(entity_type_id)
              WHERE m.entity_id=f.object_entity_id AND mk.withdrawn_at IS NULL
+               AND mk.knowledge_item_id NOT IN (SELECT id FROM excluded)
                AND e.predicate_id=f.predicate_id AND e.role='object')))
          ORDER BY f.knowledge_item_id LIMIT 1",
-        [],
+        [excluded],
         |row| row.get::<_, i64>(0),
     )
     .optional()
     .map_err(storage_error)?
     .map(KnowledgeItemId::new)
     .transpose()
+}
+
+pub(crate) fn withdraw(
+    db: &Connection,
+    ids: &[KnowledgeItemId],
+    timestamp: &str,
+    withdrawn_by: Option<&str>,
+) -> Result<Vec<Knowledge>> {
+    let mut items = ids
+        .iter()
+        .enumerate()
+        .map(|(index, id)| {
+            let item = knowledge(db, *id).map_err(|error| {
+                let message = format!("knowledge_ids[{index}] ({id}): {error}");
+                match error {
+                    CommonplaceError::NotFound(_) => CommonplaceError::NotFound(message),
+                    _ => CommonplaceError::Storage(message),
+                }
+            })?;
+            if item.withdrawn_at.is_some() {
+                return Err(CommonplaceError::InvalidInput(format!(
+                    "knowledge_ids[{index}]: {id} is already withdrawn; inspect it with get"
+                )));
+            }
+            Ok(item)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if let Some(id) = invalid_endpoint_excluding(db, ids)? {
+        return Err(CommonplaceError::InvalidInput(format!(
+            "{id} would have no permitted active type on a required predicate endpoint; \
+             retain a permitted type or include this dependent fact in knowledge_ids"
+        )));
+    }
+    for item in &mut items {
+        db.execute(
+            "UPDATE knowledge_items SET withdrawn_at=?1,withdrawn_by=?2 WHERE knowledge_item_id=?3",
+            params![timestamp, withdrawn_by, item.knowledge_id.value()],
+        )
+        .map_err(storage_error)?;
+        item.withdrawn_at = Some(timestamp.into());
+        item.withdrawn_by = withdrawn_by.map(str::to_owned);
+    }
+    Ok(items)
 }
 
 pub fn entity(db: &Connection, id: EntityId) -> Result<Entity> {

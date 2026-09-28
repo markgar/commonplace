@@ -34,6 +34,8 @@ pub enum CommandResult {
     RecordDescription(super::record::Description),
     Remove(crate::app::remove::RemoveResult),
     RemoveDescription(Box<super::remove::Description>),
+    Withdraw(crate::app::withdraw::WithdrawResult),
+    WithdrawDescription(Box<super::withdraw::Description>),
 }
 
 impl CommandResponse {

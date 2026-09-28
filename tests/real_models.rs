@@ -995,8 +995,101 @@ fn real_model_ingest_get_offline() {
             .retain(|support| support["source_key"] != source_key);
         assert_eq!(execute(&["get", id])["result"], expected);
     }
+    let fresh_passage = again["result"]["items"][0]["passage_ids"][0].clone();
+    let input = store.input(&json!({"created_by":"author","items":[
+        {"kind":"fact","subject":{"id":"entity:1"},"predicate":"reports_to",
+         "object":{"entity":{"id":"entity:2"}},"support":[{"passage_id":fresh_passage}]},
+        {"kind":"fact","subject":{"id":"entity:1"},"predicate":"decision",
+         "object":{"literal":"withdraw this decision"},"support":[{"passage_id":fresh_passage}]}
+    ]}));
+    let recorded = execute(&["record", input.to_str().unwrap()]);
+    let cited_ids: Vec<_> = recorded["result"]["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["knowledge_id"].as_str().unwrap())
+        .collect();
+    // Include empty-support facts retained by the earlier source removal.
+    let withdrawal_ids = [cited_ids[0], cited_ids[1], "knowledge:4", "knowledge:5"];
+    let prior: Vec<_> = withdrawal_ids
+        .iter()
+        .map(|id| execute(&["get", id])["result"].clone())
+        .collect();
+    let sources_before = execute(&[
+        "get",
+        again["result"]["items"][0]["document_id"].as_str().unwrap(),
+    ]);
+    let search_before = execute(&["search", "release planning"]);
+    let input = store.input(&json!({"withdrawn_by":"reviewer","knowledge_ids":withdrawal_ids}));
+    let withdrawn = execute(&["withdraw", input.to_str().unwrap(), "--json"]);
+    assert_eq!(
+        withdrawn["result"]["summary"],
+        json!({"items":4,"withdrawn":4})
+    );
+    assert_eq!(
+        withdrawn["result"]["knowledge_version"].as_i64().unwrap(),
+        recorded["result"]["knowledge_version"].as_i64().unwrap() + 1
+    );
+    let timestamp = withdrawn["result"]["items"][0]["withdrawn_at"].clone();
+    assert!(timestamp.is_string());
+    for (index, (id, before)) in withdrawal_ids.iter().zip(&prior).enumerate() {
+        let mut expected = before.clone();
+        expected["withdrawn_at"] = timestamp.clone();
+        expected["withdrawn_by"] = json!("reviewer");
+        assert_eq!(execute(&["get", id])["result"], expected);
+        expected.as_object_mut().unwrap().remove("kind");
+        expected["index"] = json!(index);
+        assert_eq!(withdrawn["result"]["items"][index], expected);
+        assert_eq!(
+            expected["support"].as_array().unwrap().len(),
+            usize::from(index < 2)
+        );
+    }
+    let after_withdrawal = execute(&["graph", "query", all_query])["result"].clone();
+    for id in withdrawal_ids {
+        assert!(
+            !after_withdrawal
+                .to_string()
+                .contains(&format!("urn:commonplace:{id}\""))
+        );
+    }
+    assert_eq!(execute(&["get", unrelated_id]), untouched_knowledge);
+    assert_eq!(
+        execute(&[
+            "get",
+            sources_before["result"]["document_id"].as_str().unwrap()
+        ]),
+        sources_before
+    );
+    assert_eq!(execute(&["search", "release planning"]), search_before);
+    assert_eq!(
+        execute(&["get", "entity:1"])["result"]["active_fact_ids"],
+        json!(&fact_ids[2..])
+    );
+    execute(&["init"]);
+    execute(&["graph", "rebuild"]);
+    assert_eq!(
+        execute(&["graph", "query", all_query])["result"],
+        after_withdrawal
+    );
+    let removed_again = execute(&["remove", "--source-key", source_key]);
+    assert_eq!(
+        removed_again["result"]["affected_knowledge_ids"],
+        json!(cited_ids)
+    );
+    for id in cited_ids {
+        let history = execute(&["get", id])["result"].clone();
+        assert_eq!(history["support"], json!([]));
+        assert_eq!(history["withdrawn_at"], timestamp);
+        assert_eq!(history["withdrawn_by"], "reviewer");
+    }
+    execute(&["graph", "rebuild"]);
+    assert_eq!(
+        execute(&["graph", "query", all_query])["result"],
+        after_withdrawal
+    );
     println!(
-        "PASS pinned local model; v2 multi-file public binary, unchanged/content/metadata revisions, exact UTF-8 get, current FTS/vector parity, strict override and default HF cache hits, unchanged graph bytes during ingest, public multiply-typed entity + relationship + literal decision record/get/SPARQL/rebuild/reopen and exact old/new citation parity; explicit file-key removal of all revisions/index/evidence, retained active membership/relationship/literal facts with empty/mixed support and unrelated citations, public search exclusion, reopen/rebuild, and new reingest identity; cache={}",
+        "PASS pinned local model; v2 multi-file public binary, unchanged/content/metadata revisions, exact UTF-8 get, current FTS/vector parity, strict override and default HF cache hits, unchanged graph bytes during ingest, public multiply-typed entity + relationship + literal decision record/get/SPARQL/rebuild/reopen and exact old/new citation parity; explicit file-key removal of all revisions/index/evidence, retained active membership/relationship/literal facts with empty/mixed support and unrelated citations, public search exclusion, reopen/rebuild, and new reingest identity; atomic cited and empty-support withdrawal with exact history, active IDs/RDF absence, unchanged sources/search/unrelated knowledge, reopen/rebuild and later removal lifecycle parity; cache={}",
         cache.display()
     );
 }

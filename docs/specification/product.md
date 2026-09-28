@@ -520,9 +520,9 @@ rules beyond JSON Schema value validation.
 
 ### 7.4 Withdrawal and history
 
-`commonplace withdraw` marks one active knowledge item withdrawn and republishes the
-graph. Withdrawn items remain readable from SQLite history but are absent from
-the active graph.
+`commonplace withdraw` marks one or more active knowledge items withdrawn and
+republishes the graph. Withdrawn items remain readable from SQLite history but are
+absent from the active graph.
 
 Withdrawal is final. There is no restore lifecycle; a corrected assertion is a
 new knowledge item.
@@ -532,6 +532,47 @@ resulting active state before mutation. It is rejected if any fact that would
 remain active loses every permitted type on a required subject or object
 endpoint, unless that dependent fact is included in the same withdrawal request.
 Any invalid or already withdrawn ID rejects the complete batch.
+
+The JSON-file input is:
+
+```sh
+commonplace withdraw withdraw.json --json
+commonplace withdraw --describe --json
+```
+
+```json
+{"withdrawn_by":"manual","knowledge_ids":["knowledge:4","knowledge:5"]}
+```
+
+`knowledge_ids` contains 1-1000 unique canonical `knowledge:<positive i64>` IDs.
+Empty batches and duplicate IDs are rejected, not no-ops or deduplicated writes.
+The optional actor label contains 1-128 Unicode scalar values when supplied;
+explicit null is rejected. Unknown and duplicate fields are rejected. Input is
+bounded to 1 MiB; the writer/publication timeout is two seconds. There is no
+stdin, JSONL, positional-ID alias or check mode.
+
+Success has `operation: withdraw`, `contract_version: "1"`, `status: complete`,
+and a result with `knowledge_version`, `summary: {"items":N,"withdrawn":N}` and
+`items` in input order. Each item contains `index` and the complete retained
+Knowledge fields: knowledge_id, schema_version, creation/withdrawal provenance,
+subtype/detail and support (including `[]`). It has no outer `kind: knowledge`
+tag. All items share one application timestamp and the version advances once.
+Stored canonical literals and creation/schema provenance do not change.
+
+Invalid shape, count, label, ID, duplicates, already-withdrawn items or invalid
+remaining endpoints yield `invalid_input`; missing IDs yield `not_found`.
+Byte-limit errors yield `limit_exceeded`, and lock contention uses `conflict`.
+Every error rejects the complete batch unless explicitly identified as
+post-commit. Committed cleanup (`post_commit_cleanup`) or response-delivery
+(`internal_error`) errors retain the committed IDs/version and instruct callers
+not to retry withdrawal, but to inspect those IDs with `get`. Only cleanup
+failures additionally instruct `graph rebuild`. Uncertain delivery requires
+inspection of the submitted IDs; there are no retained request IDs or replays.
+
+`withdraw --describe` is exclusive with the input file and needs no store or
+inference. It returns the generated execution `input_schema`, a validated
+`example`, a typed complete-envelope `output_example`, and `validation` metadata
+for stateful and lexical rules beyond JSON Schema.
 
 ## 8. Graph projection and queries
 
@@ -728,6 +769,7 @@ Complex JSON boundaries describe themselves:
 commonplace ingest --describe --json
 commonplace schema apply --describe --json
 commonplace record --describe --json
+commonplace withdraw --describe --json
 commonplace graph schema --json
 ```
 

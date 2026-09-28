@@ -376,6 +376,143 @@ fn removal_publication_failures_rollback_indexes_evidence_and_restore_or_fail_cl
 }
 
 #[test]
+fn withdrawal_publication_failures_preserve_history_and_restore_or_fail_closed() {
+    use crate::domain::ids::KnowledgeItemId;
+    use crate::storage::knowledge;
+
+    for phase in [
+        PublishPhase::BeforeBuild,
+        PublishPhase::AfterBuild,
+        PublishPhase::BetweenRenames,
+        PublishPhase::AfterActivation,
+        PublishPhase::BeforeCommit,
+        PublishPhase::BeforeRestore,
+        PublishPhase::AfterCommit,
+        PublishPhase::AfterCleanup,
+    ] {
+        let (_directory, root) = removal_store();
+        let graph = root.join("graph");
+        let before = bytes(&graph.join("current"));
+        let ids: Vec<_> = (1..=3)
+            .map(|id| KnowledgeItemId::new(id).unwrap())
+            .collect();
+        let history: Vec<_> = {
+            let read = SqliteDatabase::read(&root).unwrap();
+            ids.iter()
+                .map(|id| {
+                    serde_json::to_value(knowledge::knowledge(read.connection(), *id).unwrap())
+                        .unwrap()
+                })
+                .collect()
+        };
+        let mut writer = SqliteDatabase::write(&root, Duration::ZERO).unwrap();
+        let transaction = writer.transaction().unwrap();
+        let withdrawn =
+            knowledge::withdraw(&transaction, &ids, "2026-09-28T13:00:00Z", Some("reviewer"))
+                .unwrap();
+        assert_eq!(withdrawn.len(), 3);
+        transaction
+            .execute("UPDATE store_state SET knowledge_version=2", [])
+            .unwrap();
+        let receipt =
+            "withdraw committed at knowledge_version 2 (knowledge:1, knowledge:2, knowledge:3)";
+        let error = publish_with(
+            &root, &transaction, Duration::ZERO, receipt, crate::app::withdraw::RECOVERY_GUIDANCE,
+            |at, tx| {
+                if at == PublishPhase::AfterBuild {
+                    let candidate = projection::open_verified(&graph.join("candidate"), 2)?;
+                    assert_eq!(candidate.len().unwrap(), 1, "only version metadata remains");
+                    assert_eq!(committed_version(&root), 1);
+                }
+                if at == phase || (phase == PublishPhase::BeforeRestore && at == PublishPhase::BeforeCommit) {
+                    if phase == PublishPhase::BeforeCommit {
+                        tx.execute_batch(
+                            "PRAGMA defer_foreign_keys=ON;
+                             INSERT INTO entity_aliases VALUES (999,'bad','2026-01-01T00:00:00Z',NULL);"
+                        ).unwrap();
+                        return Ok(());
+                    }
+                    return Err(graph_error("injected withdrawal failure"));
+                }
+                Ok(())
+            },
+        ).unwrap_err();
+        let committed = matches!(
+            phase,
+            PublishPhase::AfterCommit | PublishPhase::AfterCleanup
+        );
+        if committed {
+            assert_eq!(error.code(), "post_commit_cleanup");
+            assert!(error.to_string().contains(receipt));
+            assert!(error.to_string().contains("Do not retry withdraw"));
+            assert!(error.to_string().contains("run graph rebuild"));
+            assert!(!error.to_string().contains("retry record"));
+            assert!(!error.to_string().contains("retry remove"));
+        } else if !transaction.is_autocommit() {
+            transaction.execute_batch("ROLLBACK").unwrap();
+        }
+        if phase == PublishPhase::BeforeCommit {
+            assert!(error.to_string().contains("FOREIGN KEY constraint failed"));
+            assert!(transaction.is_autocommit());
+        }
+        drop(transaction);
+        drop(writer);
+        assert_eq!(committed_version(&root), if committed { 2 } else { 1 });
+        let read = SqliteDatabase::read(&root).unwrap();
+        for (id, prior) in ids.iter().zip(&history) {
+            let mut expected = prior.clone();
+            if committed {
+                expected["withdrawn_at"] = serde_json::json!("2026-09-28T13:00:00Z");
+                expected["withdrawn_by"] = serde_json::json!("reviewer");
+            }
+            assert_eq!(
+                serde_json::to_value(knowledge::knowledge(read.connection(), *id).unwrap())
+                    .unwrap(),
+                expected,
+                "{phase:?}: {id}",
+            );
+        }
+        for (table, expected) in [
+            ("documents", 1),
+            ("document_revisions", 1),
+            ("passages", 1),
+            ("passage_fts", 1),
+            ("passage_vectors", 1),
+            ("knowledge_item_evidence", 3),
+        ] {
+            assert_eq!(
+                read.connection()
+                    .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r
+                        .get::<_, i64>(0))
+                    .unwrap(),
+                expected,
+                "{phase:?}: {table}"
+            );
+        }
+        drop(read);
+        if phase == PublishPhase::BeforeRestore {
+            assert!(error.to_string().contains("restoration failed"));
+            assert!(GraphRuntime::open(&root).is_err());
+        } else {
+            GraphRuntime::open(&root).unwrap();
+            if !committed {
+                assert_eq!(bytes(&graph.join("current")), before);
+            }
+        }
+        rebuild(&root, Duration::ZERO).unwrap();
+        let reopened = GraphRuntime::open(&root).unwrap();
+        let active = reopened
+            .query(
+                "SELECT ?k WHERE {?k <urn:commonplace:property:kind> ?kind}",
+                QueryConfig::default(),
+            )
+            .unwrap();
+        assert_eq!(active.rows.len(), if committed { 0 } else { 3 });
+        assert_eq!(committed_version(&root), if committed { 2 } else { 1 });
+    }
+}
+
+#[test]
 fn coordinated_build_activation_and_real_commit_failures_restore_old_state() {
     for phase in [
         PublishPhase::BeforeBuild,

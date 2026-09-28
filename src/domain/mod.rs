@@ -6,3 +6,4 @@ pub mod passages;
 pub mod remove;
 pub mod schema;
 pub mod search;
+pub mod withdraw;
