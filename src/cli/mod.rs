@@ -53,7 +53,7 @@ enum Command {
         #[arg(long, default_value_t = crate::domain::search::DEFAULT_RESULT_LIMIT)]
         limit: usize,
     },
-    /// Atomically record entities, metadata, and cited types from JSON (not facts/JSONL).
+    /// Atomically record entities, metadata, cited types and facts from JSON or JSONL.
     Record(record::RecordArgs),
     /// Read document metadata, revision text, or an exact passage, entity, or knowledge item.
     Get { id: String },

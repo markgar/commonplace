@@ -97,7 +97,7 @@ fn multiple_types_exact_old_new_evidence_canonical_get_query_and_reopen() {
     );
     assert_eq!(
         result["result"]["summary"],
-        json!({"items":3,"entities_created":1,"metadata_changed":0,"memberships_created":2})
+        json!({"items":3,"entities_created":1,"metadata_changed":0,"memberships_created":2,"facts_created":0})
     );
     assert_eq!(result["result"]["knowledge_version"], 1);
     assert_eq!(result["result"]["items"][1]["support"][0], exact);
@@ -397,9 +397,10 @@ fn withdrawn_memberships_remain_readable_and_bad_subtypes_fail_closed() {
 #[test]
 fn readers_and_writer_processes_exclude_authoring_publication() {
     let store = Store::new();
-    types(&store);
+    fact_types(&store);
     let request = json!({"items":[{"kind":"entity","ref":"e","name":"E"},
-        {"kind":"type_membership","entity":{"ref":"e"},"entity_type":"person"}]});
+        {"kind":"type_membership","entity":{"ref":"e"},"entity_type":"person"},
+        {"kind":"fact","subject":{"ref":"e"},"predicate":"decision","object":{"literal":"yes"}}]});
     let first = common::LockHolder::start_named(&store, "record_reader", "reader1");
     let second = common::LockHolder::start_named(&store, "record_reader", "reader2");
     let graph = store.graph_files();
@@ -424,7 +425,580 @@ fn readers_and_writer_processes_exclude_authoring_publication() {
     assert_eq!(error.code(), "conflict");
     drop(writer);
     record(&store, &request);
-    assert_eq!(count(&store, "knowledge_items"), 1);
+    assert_eq!(count(&store, "knowledge_items"), 2);
+}
+
+fn fact_types(store: &Store) {
+    types(store);
+    store.apply(&json!({"predicates":[
+        {"name":"works_with","object_kind":"entity","subject_types":["person"],"object_types":["lead"]},
+        {"name":"decision","object_kind":"string","subject_types":["person"]},
+        {"name":"count","object_kind":"integer","subject_types":["person"]},
+        {"name":"enabled","object_kind":"boolean","subject_types":["person"]},
+        {"name":"decided_at","object_kind":"timestamp","subject_types":["person"]},
+        {"name":"unused_predicate","object_kind":"string","subject_types":["person"]}
+    ]}), false);
+}
+
+fn literal_fact(predicate: &str, literal: Value) -> Value {
+    json!({"kind":"fact","subject":{"id":"entity:1"},"predicate":predicate,
+        "object":{"literal":literal}})
+}
+
+#[test]
+fn relationships_literals_resulting_types_exact_evidence_and_fact_only_publication() {
+    let store = Store::new();
+    fact_types(&store);
+    let old = evidence(&store, "Riley 🦀\r\napproved.\0");
+    let new = evidence(&store, "Riley approved the decision.");
+    let exact = store.success(&["get", old.as_str().unwrap()])["result"].clone();
+    let support = json!([
+        {"passage_id":old,"quote":exact["text"],"start_byte":exact["start_byte"],"end_byte":exact["end_byte"]},
+        {"passage_id":new}
+    ]);
+    let authored = record(
+        &store,
+        &json!({"created_by":"manual","items":[
+            {"kind":"entity","ref":"riley","name":"Riley","aliases":["R"]},
+            {"kind":"entity","ref":"lead","name":"Leader","identifiers":[{"scheme":"email","value":"lead@example.test"}]},
+            {"kind":"fact","subject":{"ref":"riley"},"predicate":"works_with",
+                "object":{"entity":{"ref":"lead"}},"support":support},
+            {"kind":"fact","subject":{"ref":"riley"},"predicate":"decision",
+                "object":{"literal":"approved"},"support":support},
+            {"kind":"type_membership","entity":{"ref":"riley"},"entity_type":"person"},
+            {"kind":"type_membership","entity":{"ref":"lead"},"entity_type":"lead"},
+            {"kind":"type_membership","entity":{"ref":"riley"},"entity_type":"lead"}
+        ]}),
+    );
+    let result = &authored["result"];
+    assert_eq!(result["knowledge_version"], 1);
+    assert_eq!(
+        result["summary"],
+        json!({"items":7,"entities_created":2,
+        "metadata_changed":0,"memberships_created":3,"facts_created":2})
+    );
+    assert_eq!(
+        result["items"][2]["object"],
+        json!({"entity_id":"entity:2"})
+    );
+    assert_eq!(
+        result["items"][3]["object"],
+        json!({
+        "literal_kind":"string","literal":"approved","literal_json":"\"approved\""})
+    );
+    assert_eq!(result["items"][2]["support"].as_array().unwrap().len(), 2);
+    assert_eq!(result["items"][2]["support"][0]["text"], exact["text"]);
+    for id in ["knowledge:1", "knowledge:2"] {
+        let got = store.success(&["get", id])["result"].clone();
+        assert_eq!(got["subtype"], "fact");
+        assert_eq!(got["schema_version"], 2);
+        assert_eq!(got["created_by"], "manual");
+        assert_eq!(got["support"], result["items"][2]["support"]);
+    }
+    assert_eq!(
+        store.success(&["get", "entity:2"])["result"]["active_fact_ids"],
+        json!(["knowledge:1"])
+    );
+    let count_query = "PREFIX c:<urn:commonplace:property:> SELECT (COUNT(?k) AS ?n) WHERE { ?k c:kind \"fact\" }";
+    assert_eq!(
+        store.success(&["graph", "query", count_query])["result"]["rows"][0][0]["value"],
+        "2"
+    );
+    let citation_query = "PREFIX c:<urn:commonplace:property:> SELECT ?k ?p ?r ?d ?text ?start ?end WHERE {
+        ?k c:kind \"fact\"; c:evidence ?p . ?p c:revision ?r; c:text ?text; c:start_byte ?start; c:end_byte ?end .
+        ?r c:document ?d } ORDER BY ?k ?p";
+    let citations = store.success(&["graph", "query", citation_query])["result"].clone();
+    assert_eq!(citations["rows"].as_array().unwrap().len(), 4);
+    assert_eq!(citations["rows"][0][4]["value"], exact["text"]);
+    assert_eq!(
+        citations["rows"][0][5]["value"],
+        exact["start_byte"].to_string()
+    );
+    assert_eq!(
+        citations["rows"][0][6]["value"],
+        exact["end_byte"].to_string()
+    );
+
+    let followup = json!({"items":[
+        literal_fact("count", json!(i64::MIN)), literal_fact("count", json!(i64::MAX)),
+        literal_fact("enabled", json!(true)), literal_fact("enabled", json!(false)),
+        literal_fact("decided_at", json!("2026-09-28T12:25:23.123-05:00")),
+        literal_fact("decision", json!("")), literal_fact("decision", json!("é\0\n\"\\"))
+    ]});
+    let more = record(&store, &followup);
+    assert_eq!(more["result"]["knowledge_version"], 2);
+    assert_eq!(more["result"]["summary"]["memberships_created"], 0);
+    assert_eq!(more["result"]["summary"]["facts_created"], 7);
+    assert_eq!(
+        more["result"]["items"][4]["object"]["literal"],
+        "2026-09-28T17:25:23.123Z"
+    );
+    assert_eq!(
+        more["result"]["items"][0]["object"]["literal_json"],
+        i64::MIN.to_string()
+    );
+    assert_eq!(
+        more["result"]["items"][1]["object"]["literal"],
+        json!(i64::MAX)
+    );
+    for item in more["result"]["items"].as_array().unwrap() {
+        let id = item["knowledge_id"].as_str().unwrap();
+        let got = store.success(&["get", id])["result"].clone();
+        assert_eq!(got["object"], item["object"]);
+        assert_eq!(got["support"], json!([]));
+        let query = format!(
+            "PREFIX c:<urn:commonplace:property:> SELECT ?object ?json ?kind WHERE {{
+            <urn:commonplace:{id}> c:object ?object; c:literal_json ?json; c:literal_kind ?kind }}"
+        );
+        let result = store.success(&["graph", "query", &query]);
+        let row = &result["result"]["rows"][0];
+        assert_eq!(row[1]["value"], item["object"]["literal_json"]);
+        assert_eq!(row[2]["value"], item["object"]["literal_kind"]);
+        let kind = item["object"]["literal_kind"].as_str().unwrap();
+        let datatype = if kind == "timestamp" {
+            "dateTime"
+        } else {
+            kind
+        };
+        assert_eq!(
+            row[0]["datatype"],
+            format!("http://www.w3.org/2001/XMLSchema#{datatype}")
+        );
+        let literal = &item["object"]["literal"];
+        assert_eq!(
+            row[0]["value"],
+            literal
+                .as_str()
+                .map(str::to_owned)
+                .unwrap_or_else(|| literal.to_string())
+        );
+    }
+    assert_eq!(
+        store.success(&["graph", "query", count_query])["result"]["rows"][0][0]["value"],
+        "9"
+    );
+    let repeated = record(&store, &followup);
+    assert_ne!(
+        repeated["result"]["items"][0]["knowledge_id"],
+        more["result"]["items"][0]["knowledge_id"]
+    );
+    assert_eq!(repeated["result"]["knowledge_version"], 3);
+    let resolved = record(
+        &store,
+        &json!({"items":[
+            {"kind":"fact","subject":{"name":"R"},"predicate":"works_with",
+                "object":{"entity":{"identifier":{"scheme":"email","value":"lead@example.test"}}}}
+        ]}),
+    );
+    assert_eq!(
+        resolved["result"]["items"][0]["subject_entity_id"],
+        "entity:1"
+    );
+    assert_eq!(
+        resolved["result"]["items"][0]["object"],
+        json!({"entity_id":"entity:2"})
+    );
+    assert_eq!(resolved["result"]["items"][0]["support"], json!([]));
+    let query = "SELECT ?s ?p ?o WHERE {?s ?p ?o} ORDER BY ?s ?p ?o";
+    let before = store.success(&["graph", "query", query])["result"].clone();
+    store.success(&["graph", "rebuild"]);
+    assert_eq!(store.success(&["graph", "query", query])["result"], before);
+    assert_eq!(
+        store.success(&["graph", "query", citation_query])["result"],
+        citations
+    );
+    assert_eq!(store.success(&["graph","query",
+        "PREFIX c:<urn:commonplace:property:> SELECT ?s WHERE {?s c:name ?name FILTER(?name IN (\"unused\", \"unused_predicate\"))}"])["result"]["rows"], json!([]));
+    store.apply(&json!({"entity_types":[{"name":"later"}]}), false);
+    record(
+        &store,
+        &json!({"items":[literal_fact("decision",json!("later"))]}),
+    );
+    assert_eq!(
+        store.success(&["get", "knowledge:1"])["result"]["schema_version"],
+        2
+    );
+    let last: i64 = store
+        .database()
+        .query_row(
+            "SELECT max(knowledge_item_id) FROM knowledge_items",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        store.success(&["get", &format!("knowledge:{last}")])["result"]["schema_version"],
+        3
+    );
+    let timestamps: i64 = store.database().query_row(
+        "SELECT count(DISTINCT created_at) FROM (
+          SELECT created_at FROM entities UNION ALL SELECT created_at FROM knowledge_items WHERE knowledge_item_id<=5)",
+        [], |r|r.get(0)).unwrap();
+    assert_eq!(timestamps, 1);
+}
+
+#[test]
+fn fact_validation_and_hydration_failures_roll_back_entire_request() {
+    let store = Store::new();
+    fact_types(&store);
+    let passage = evidence(&store, "é\r\n\0");
+    record(
+        &store,
+        &json!({"items":[{"kind":"entity","name":"Riley"},
+        {"kind":"type_membership","entity":{"id":"entity:1"},"entity_type":"person"}]}),
+    );
+    let invalid = [
+        literal_fact("unknown", json!("x")),
+        literal_fact("count", json!("1")),
+        literal_fact("enabled", json!("true")),
+        literal_fact("decision", json!(false)),
+        literal_fact("decided_at", json!("not-time")),
+        literal_fact("decided_at", json!(0)),
+        json!({"kind":"fact","subject":{"id":"entity:1"},"predicate":"works_with","object":{"literal":"entity:1"}}),
+        json!({"kind":"fact","subject":{"id":"entity:1"},"predicate":"decision","object":{"entity":{"id":"entity:1"}}}),
+        json!({"kind":"fact","subject":{"id":"entity:1"},"predicate":"works_with","object":{"entity":{"id":"entity:1"}}}),
+        json!({"kind":"fact","subject":{"ref":"missing"},"predicate":"decision","object":{"literal":"x"}}),
+        json!({"kind":"fact","subject":{"id":"entity:1"},"predicate":"decision","object":{"literal":"x"},
+            "support":[{"passage_id":passage,"quote":"é"}]}),
+        json!({"kind":"fact","subject":{"id":"entity:1"},"predicate":"decision","object":{"literal":"x"},
+            "support":[{"passage_id":passage,"start_byte":1,"end_byte":5}]}),
+        json!({"kind":"fact","subject":{"id":"entity:1"},"predicate":"decision","object":{"literal":"x"},
+            "support":[{"passage_id":passage},{"passage_id":passage}]}),
+    ];
+    let graph = store.graph_files();
+    reject(
+        &store,
+        &json!({"items":[
+            {"kind":"entity","ref":"bare","name":"Bare"},
+            {"kind":"fact","subject":{"ref":"bare"},"predicate":"decision","object":{"literal":"no type"}}
+        ]}),
+        "invalid_input",
+        2,
+    );
+    assert_eq!(count(&store, "entities"), 1);
+    for item in invalid {
+        reject(
+            &store,
+            &json!({"items":[
+                {"kind":"entity","name":"Must roll back"},
+                {"kind":"entity_metadata","entity_id":"entity:1","add_aliases":["temporary"]},
+                literal_fact("decision",json!("also roll back")), item
+            ]}),
+            "invalid_input",
+            2,
+        );
+        assert_eq!(count(&store, "entities"), 1);
+        assert_eq!(count(&store, "knowledge_items"), 1);
+        assert_eq!(count(&store, "entity_aliases"), 0);
+        assert_eq!(store.graph_files(), graph);
+    }
+    for item in [
+        json!({"kind":"fact","subject":{"id":"entity:999"},"predicate":"decision","object":{"literal":"x"}}),
+        json!({"kind":"fact","subject":{"id":"entity:1"},"predicate":"decision","object":{"literal":"x"},
+            "support":[{"passage_id":"passage:999"}]}),
+        json!({"kind":"fact","subject":{"id":"entity:1"},"predicate":"works_with","object":{"entity":{"id":"entity:999"}}}),
+    ] {
+        reject(
+            &store,
+            &json!({"items":[literal_fact("decision",json!("rollback")),item]}),
+            "not_found",
+            2,
+        );
+        assert_eq!(count(&store, "facts"), 0);
+    }
+    store
+        .database()
+        .execute(
+            "UPDATE passages SET text='corrupt' WHERE passage_id=?1",
+            [passage
+                .as_str()
+                .unwrap()
+                .strip_prefix("passage:")
+                .unwrap()
+                .parse::<i64>()
+                .unwrap()],
+        )
+        .unwrap();
+    let item = json!({"kind":"fact","subject":{"id":"entity:1"},"predicate":"decision","object":{"literal":"x"},
+        "support":[{"passage_id":passage}]});
+    reject(
+        &store,
+        &json!({"items":[literal_fact("decision",json!("rollback")),item]}),
+        "internal_error",
+        1,
+    );
+    assert_eq!(count(&store, "facts"), 0);
+    assert_eq!(store.graph_files(), graph);
+    store
+        .database()
+        .execute(
+            "UPDATE knowledge_items SET withdrawn_at='2026-01-01T00:00:00Z'",
+            [],
+        )
+        .unwrap();
+    reject(
+        &store,
+        &json!({"items":[literal_fact("decision",json!("no active type"))]}),
+        "invalid_input",
+        2,
+    );
+    assert_eq!(count(&store, "facts"), 0);
+}
+
+#[test]
+fn exact_fact_numeric_tokens_and_generated_descriptions() {
+    let store = Store::new();
+    fact_types(&store);
+    record(
+        &store,
+        &json!({"items":[{"kind":"entity","name":"Riley"},
+        {"kind":"type_membership","entity":{"id":"entity:1"},"entity_type":"person"}]}),
+    );
+    let description = store.success(&["record", "--describe"]);
+    let validator = jsonschema::validator_for(&description["result"]["input_schema"]).unwrap();
+    for example in description["result"]["jsonl"]["example"]
+        .as_array()
+        .unwrap()
+    {
+        assert!(validator.is_valid(example));
+    }
+    let path = store.directory.path().join("tokens.json");
+    for token in [
+        "1.0",
+        "1e0",
+        "-0.0",
+        "9223372036854775808",
+        "-9223372036854775809",
+        "18446744073709551615",
+        "1e100",
+        "null",
+        "[]",
+        "{}",
+    ] {
+        let raw = format!(
+            r#"{{"items":[{{"kind":"fact","subject":{{"id":"entity:1"}},"predicate":"count","object":{{"literal":{token}}}}}]}}"#
+        );
+        std::fs::write(&path, &raw).unwrap();
+        store.failure(&["record", path.to_str().unwrap()], "invalid_input", 2);
+        store.failure(
+            &["record", "--jsonl", path.to_str().unwrap()],
+            "invalid_input",
+            2,
+        );
+    }
+    for raw in [
+        r#"{"items":[{"kind":"fact","subject":{"id":"entity:1"},"predicate":"count","object":{"literal":1,"literal":2}}]}"#,
+        r#"{"items":[{"kind":"fact","subject":{"id":"entity:1"},"predicate":"count","object":{"literal":1,"entity":{"id":"entity:1"}}}]}"#,
+    ] {
+        std::fs::write(&path, raw).unwrap();
+        store.failure(&["record", path.to_str().unwrap()], "invalid_input", 2);
+    }
+    assert_eq!(count(&store, "facts"), 0);
+    for integer in [i64::MIN, i64::MAX] {
+        let input = json!({"items":[literal_fact("count",json!(integer))]});
+        assert!(validator.is_valid(&input));
+        record(&store, &input);
+    }
+    assert_eq!(count(&store, "facts"), 2);
+}
+
+#[test]
+fn jsonl_fragments_are_one_request_with_global_limits_refs_and_creator() {
+    let store = Store::new();
+    fact_types(&store);
+    let path = store.directory.path().join("request.jsonl");
+    let first = json!({"created_by":"manual","items":[{"kind":"entity","ref":"r","name":"Riley"}]});
+    let fact = json!({"kind":"fact","subject":{"ref":"r"},"predicate":"decision","object":{"literal":"approved"}});
+    let second = json!({"created_by":"manual","items":[fact,
+        {"kind":"type_membership","entity":{"ref":"r"},"entity_type":"person"}]});
+    std::fs::write(&path, format!("{first}\r\n{second}\r\n")).unwrap();
+    let result = store.success(&["record", "--jsonl", path.to_str().unwrap()]);
+    assert_eq!(result["result"]["knowledge_version"], 1);
+    assert_eq!(result["result"]["summary"]["items"], 3);
+    assert_eq!(result["result"]["items"][1]["index"], 1);
+    assert_eq!(
+        store.success(&["get", "knowledge:1"])["result"]["created_by"],
+        "manual"
+    );
+    let before = store.graph_files();
+    for tail in [
+        "",
+        " ",
+        "{",
+        r#"{"items":[],"items":[]}"#,
+        r#"{"items":[],"unknown":0}"#,
+        r#"{"items":[]}"#,
+        r#"{"created_by":"other","items":[]}"#,
+        r#"{"created_by":"manual","items":[{"kind":"fact","subject":{"ref":"r"},"predicate":"decision","object":{"literal":false}}]}"#,
+    ] {
+        let raw = format!("{first}\n{tail}\n");
+        std::fs::write(&path, raw).unwrap();
+        let error = store.failure(
+            &["record", "--jsonl", path.to_str().unwrap()],
+            "invalid_input",
+            2,
+        );
+        if tail
+            != r#"{"created_by":"manual","items":[{"kind":"fact","subject":{"ref":"r"},"predicate":"decision","object":{"literal":false}}]}"#
+        {
+            assert!(
+                error["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("line 2")
+            );
+        }
+        assert_eq!(count(&store, "entities"), 1);
+        assert_eq!(count(&store, "knowledge_items"), 2);
+        assert_eq!(store.graph_files(), before);
+    }
+    for raw in [
+        "",
+        "\u{feff}{\"items\":[]}",
+        "{\"items\":[]} {\"items\":[]}",
+        "{\"items\":[]}\n\n",
+    ] {
+        std::fs::write(&path, raw).unwrap();
+        store.failure(
+            &["record", "--jsonl", path.to_str().unwrap()],
+            "invalid_input",
+            2,
+        );
+    }
+    std::fs::write(&path, b"{\"items\":[]}\n\xff").unwrap();
+    let error = store.failure(
+        &["record", "--jsonl", path.to_str().unwrap()],
+        "invalid_input",
+        2,
+    );
+    assert!(
+        error["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("line 2")
+    );
+    std::fs::write(
+        &path,
+        r#"{"items":[{"kind":"type_membership","entity":{"ref":"r"},"entity_type":"person"}]}"#,
+    )
+    .unwrap();
+    store.failure(
+        &["record", "--jsonl", path.to_str().unwrap()],
+        "invalid_input",
+        2,
+    );
+    let mut full = b"{\"items\":[]}\n{\"items\":[]}".to_vec();
+    full.resize(1024 * 1024 - 1, b' ');
+    std::fs::write(&path, &full).unwrap();
+    store.success(&["record", "--jsonl", path.to_str().unwrap()]);
+    full.resize(1024 * 1024, b' ');
+    std::fs::write(&path, &full).unwrap();
+    store.success(&["record", "--jsonl", path.to_str().unwrap()]);
+    full.push(b' ');
+    std::fs::write(&path, &full).unwrap();
+    store.failure(
+        &["record", "--jsonl", path.to_str().unwrap()],
+        "limit_exceeded",
+        2,
+    );
+    assert_eq!(store.graph_files(), before);
+    for raw in [
+        r#"{"created_by":null,"items":[]}"#,
+        r#"{"created_by":"","items":[]}"#,
+    ] {
+        std::fs::write(&path, raw).unwrap();
+        store.failure(&["record", path.to_str().unwrap()], "invalid_input", 2);
+        store.failure(
+            &["record", "--jsonl", path.to_str().unwrap()],
+            "invalid_input",
+            2,
+        );
+    }
+    std::fs::write(
+        &path,
+        "{\"created_by\":\"manual\",\"items\":[]}\n{\"created_by\":\"man\\u0075al\",\"items\":[]}",
+    )
+    .unwrap();
+    store.success(&["record", "--jsonl", path.to_str().unwrap()]);
+    for args in [
+        vec![
+            "record",
+            path.to_str().unwrap(),
+            "--jsonl",
+            path.to_str().unwrap(),
+        ],
+        vec!["record", path.to_str().unwrap(), "--describe"],
+        vec!["record", "--jsonl", path.to_str().unwrap(), "--describe"],
+        vec!["record"],
+    ] {
+        let output = store.run(&args);
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+    }
+    for size in [999, 1000, 1001] {
+        let a = json!({"items":(0..500).map(|_|literal_fact("decision",json!("x"))).collect::<Vec<_>>()});
+        let b = json!({"items":(500..size).map(|_|literal_fact("decision",json!("x"))).collect::<Vec<_>>()});
+        std::fs::write(&path, format!("{a}\n{b}")).unwrap();
+        if size <= 1000 {
+            let result = store.success(&["record", "--jsonl", path.to_str().unwrap()]);
+            assert_eq!(result["result"]["items"].as_array().unwrap().len(), size);
+        } else {
+            let count_before = count(&store, "facts");
+            store.failure(
+                &["record", "--jsonl", path.to_str().unwrap()],
+                "invalid_input",
+                2,
+            );
+            assert_eq!(count(&store, "facts"), count_before);
+        }
+    }
+}
+
+#[test]
+fn historical_facts_remain_readable_and_invalid_literals_fail_closed() {
+    let store = Store::new();
+    fact_types(&store);
+    record(
+        &store,
+        &json!({"items":[{"kind":"entity","name":"Riley"},
+        {"kind":"type_membership","entity":{"id":"entity:1"},"entity_type":"person"},
+        literal_fact("count",json!(42))]}),
+    );
+    for literal in [
+        "42.0",
+        "9223372036854775808",
+        "\"42\"",
+        " 42",
+        "true",
+        "null",
+    ] {
+        store
+            .database()
+            .execute("UPDATE facts SET literal_json=?1", [literal])
+            .unwrap();
+        store.failure(&["get", "knowledge:2"], "internal_error", 1);
+        store.failure(&["graph", "rebuild"], "internal_error", 1);
+    }
+    store
+        .database()
+        .execute_batch(
+            "UPDATE facts SET literal_json='42';
+        UPDATE knowledge_items SET withdrawn_at='2026-01-01T00:00:00Z',withdrawn_by='fixture';",
+        )
+        .unwrap();
+    let got = store.success(&["get", "knowledge:2"])["result"].clone();
+    assert_eq!(got["object"]["literal"], 42);
+    assert_eq!(got["support"], json!([]));
+    assert_eq!(got["withdrawn_by"], "fixture");
+    store.success(&["graph", "rebuild"]);
+    assert_eq!(
+        store.success(&["get", "entity:1"])["result"]["active_fact_ids"],
+        json!([])
+    );
+    assert_eq!(
+        store.success(&["graph", "query", "SELECT ?s WHERE {?s ?p ?o}"])["result"]["rows"],
+        json!([])
+    );
 }
 
 #[test]

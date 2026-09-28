@@ -552,7 +552,10 @@ fn real_model_ingest_get_offline() {
     );
 
     store.apply(
-        &json!({"entity_types":[{"name":"person"},{"name":"lead"}]}),
+        &json!({"entity_types":[{"name":"person"},{"name":"lead"}],"predicates":[
+            {"name":"reports_to","object_kind":"entity","subject_types":["person"],"object_types":["lead"]},
+            {"name":"decision","object_kind":"string","subject_types":["person"]}
+        ]}),
         false,
     );
     let passages = [
@@ -567,11 +570,32 @@ fn real_model_ingest_get_offline() {
         {"kind":"entity","ref":"ada","name":"Ada"},
         {"kind":"type_membership","entity":{"ref":"ada"},"entity_type":"person",
             "support":passages.iter().map(|id| json!({"passage_id":id})).collect::<Vec<_>>()},
-        {"kind":"type_membership","entity":{"ref":"ada"},"entity_type":"lead","support":[]}
+        {"kind":"type_membership","entity":{"ref":"ada"},"entity_type":"lead","support":[]},
+        {"kind":"entity","ref":"lead","name":"Grace"},
+        {"kind":"type_membership","entity":{"ref":"lead"},"entity_type":"lead"},
+        {"kind":"fact","subject":{"ref":"ada"},"predicate":"reports_to","object":{"entity":{"ref":"lead"}},
+            "support":passages.iter().map(|id| json!({"passage_id":id})).collect::<Vec<_>>()},
+        {"kind":"fact","subject":{"ref":"ada"},"predicate":"decision","object":{"literal":"approved"},
+            "support":passages.iter().map(|id| json!({"passage_id":id})).collect::<Vec<_>>()}
     ]}));
     let recorded = execute(&["record", input.to_str().unwrap()]);
     assert_eq!(recorded["result"]["knowledge_version"], 1);
-    assert_eq!(recorded["result"]["summary"]["memberships_created"], 2);
+    assert_eq!(recorded["result"]["summary"]["memberships_created"], 3);
+    assert_eq!(recorded["result"]["summary"]["facts_created"], 2);
+    assert_eq!(
+        execute(&["get", "knowledge:4"])["result"]["object"],
+        json!({"entity_id":"entity:2"})
+    );
+    assert_eq!(
+        execute(&["get", "knowledge:5"])["result"]["object"],
+        json!({
+            "literal_kind":"string","literal":"approved","literal_json":"\"approved\""
+        })
+    );
+    assert_eq!(
+        execute(&["get", "entity:1"])["result"]["active_fact_ids"],
+        json!(["knowledge:4", "knowledge:5"])
+    );
     assert_eq!(
         execute(&["get", "entity:1"])["result"]["active_type_membership_ids"],
         json!(["knowledge:1", "knowledge:2"])
@@ -594,6 +618,24 @@ fn real_model_ingest_get_offline() {
             ?r c:document ?d
         } ORDER BY ?p";
     let published = execute(&["graph", "query", citation_query])["result"].clone();
+    let fact_query = "PREFIX c:<urn:commonplace:property:> SELECT ?k ?subject ?predicate ?object ?p ?text WHERE {
+        ?k c:kind \"fact\"; c:subject ?subject; c:predicate ?predicate; c:object ?object; c:evidence ?p.
+        ?p c:text ?text } ORDER BY ?k ?p";
+    let fact_graph = execute(&["graph", "query", fact_query])["result"].clone();
+    assert_eq!(fact_graph["rows"].as_array().unwrap().len(), 4);
+    assert_eq!(
+        fact_graph["rows"][0][0]["value"],
+        "urn:commonplace:knowledge:4"
+    );
+    assert_eq!(
+        fact_graph["rows"][0][3],
+        json!({"type":"uri","value":"urn:commonplace:entity:2"})
+    );
+    assert_eq!(
+        fact_graph["rows"][2][3],
+        json!({"type":"literal","value":"approved",
+        "datatype":"http://www.w3.org/2001/XMLSchema#string","language":null})
+    );
     assert_eq!(
         execute(&["graph", "rebuild"])["result"],
         json!({"knowledge_version":1})
@@ -619,6 +661,34 @@ fn real_model_ingest_get_offline() {
         assert_eq!(row[3]["value"], exact["text"]);
         assert_eq!(row[4]["value"], exact["start_byte"].to_string());
         assert_eq!(row[5]["value"], exact["end_byte"].to_string());
+        for id in ["knowledge:4", "knowledge:5"] {
+            let got = execute(&["get", id]);
+            let support = got["result"]["support"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|support| support["passage_id"] == passage)
+                .unwrap();
+            for field in [
+                "text",
+                "start_byte",
+                "end_byte",
+                "document_id",
+                "revision_id",
+                "metadata",
+            ] {
+                assert_eq!(support[field], exact[field]);
+            }
+            let row = fact_graph["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| {
+                    row[0]["value"] == format!("urn:commonplace:{id}") && row[4]["value"] == uri
+                })
+                .unwrap();
+            assert_eq!(row[5]["value"], exact["text"]);
+        }
     }
     execute(&["graph", "rebuild"]);
     assert_eq!(
@@ -626,8 +696,12 @@ fn real_model_ingest_get_offline() {
         citations
     );
     assert_eq!(execute(&["init"])["status"], "unchanged");
+    assert_eq!(
+        execute(&["graph", "query", fact_query])["result"],
+        fact_graph
+    );
     println!(
-        "PASS pinned local model; v2 multi-file public binary, unchanged/content/metadata revisions, exact UTF-8 get, current FTS/vector parity, strict override and default HF cache hits, unchanged graph bytes during ingest, public multiply-typed record/get/SPARQL/rebuild/reopen and exact old/new citation parity; cache={}",
+        "PASS pinned local model; v2 multi-file public binary, unchanged/content/metadata revisions, exact UTF-8 get, current FTS/vector parity, strict override and default HF cache hits, unchanged graph bytes during ingest, public multiply-typed entity + relationship + literal decision record/get/SPARQL/rebuild/reopen and exact old/new citation parity; cache={}",
         cache.display()
     );
 }

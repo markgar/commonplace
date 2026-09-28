@@ -7,7 +7,7 @@ hybrid SQLite search, explicitly authored cited knowledge, and local graph
 queries.
 
 The Rust implementation supports store initialization, additive vocabulary,
-file and generic stdin/JSONL ingestion, hybrid search, atomic cited entity/type
+file and generic stdin/JSONL ingestion, hybrid search, atomic cited entity/type/fact
 authoring, authoritative reads, and read-only RDF graph queries and rebuild:
 
 ```sh
@@ -89,7 +89,7 @@ vocabulary. Vocabulary operations neither load inference
 nor open or rebuild Oxigraph, and remain available when derived graph state is
 missing or corrupt.
 
-## Cited entities and types
+## Cited entities, types and facts
 
 After ingesting evidence and applying your vocabulary, create `record.json`:
 
@@ -114,15 +114,57 @@ cargo run --bin commonplace -- --store .commonplace get entity:1
 cargo run --bin commonplace -- --store .commonplace get knowledge:1
 ```
 
-One JSON request is atomic, including all entities, metadata, memberships, and
+One JSON request is atomic, including all entities, metadata, memberships, facts, and
 graph publication. Repeat membership items to assign multiple types; successful
 repeated writes receive distinct knowledge IDs. Entity creation is explicit and
 never merges by name. Memberships resolve exactly one selector: `{"id":"entity:1"}`,
 `{"identifier":{"scheme":"email","value":"riley@example.test"}}`, `{"name":"R"}`,
 or `{"ref":"riley"}`. Exact case-sensitive name/alias matches must be unambiguous.
 Local refs match `[A-Za-z][A-Za-z0-9_]{0,63}`, refer only to preceding entity items,
-and last only for this request. Fact authoring, `record` JSONL, withdrawal, and
-name changes are not supported by this release (`ingest --jsonl` is supported).
+and last only for this request. Withdrawal and name changes are not supported
+by this release.
+
+Add directed facts using a declared predicate and matching subject/object types:
+
+```json
+{"created_by":"manual","items":[
+  {"kind":"entity","ref":"acme","name":"Acme"},
+  {"kind":"type_membership","entity":{"ref":"acme"},"entity_type":"company"},
+  {"kind":"fact","subject":{"id":"entity:1"},"predicate":"works_at",
+   "object":{"entity":{"ref":"acme"}},"support":[{"passage_id":"passage:1"}]}
+]}
+```
+
+Fact subjects and entity objects accept the same selectors as memberships.
+Every required endpoint needs at least one permitted active type in the
+**resulting** state; memberships may appear after facts within the request.
+For a literal predicate, use `"object":{"literal":"approved"}` (string),
+`{"literal":42}` (integer), `{"literal":true}` (boolean), or
+`{"literal":"2026-09-28T12:25:23.123-05:00"}` (timestamp).
+Declare the corresponding predicate kind and subject types with `schema apply`.
+Timestamps normalize to UTC (`2026-09-28T17:25:23.123Z` here). Integer limits are
+exactly -9223372036854775808 through 9223372036854775807; floats/exponent tokens,
+including `1.0` and `1e0`, are rejected. Null, arrays and objects are not literals.
+Empty strings are valid string facts. Repeated successful facts get distinct
+knowledge IDs, including when the subject, predicate, object and citations match.
+
+`record --jsonl facts.jsonl --json` accepts one request-envelope fragment per
+line and flattens **all** fragments into one atomic request, not ingestion's
+per-document writes:
+
+```jsonl
+{"created_by":"manual","items":[{"kind":"entity","ref":"riley","name":"Riley"}]}
+{"created_by":"manual","items":[{"kind":"type_membership","entity":{"ref":"riley"},"entity_type":"person"}]}
+```
+
+Refs cross preceding fragments. Every fragment must have the same decoded
+optional `created_by`, including omission; there is no inheritance or per-line
+creator. Existing label validation is unchanged (explicit null is not accepted
+by the CLI schema). LF/CRLF and an optional final newline are accepted.
+Empty files, blank lines, BOMs, invalid UTF-8, multiple values per line, and
+unknown/duplicate fields fail the complete request; `{"items":[]}` is an explicit
+no-op. Decode errors name physical lines; item indices use flattened input order.
+The file, --jsonl and --describe modes are exclusive; record has no stdin mode.
 
 `entity_metadata` items require `entity_id` and accept `add_aliases`,
 `remove_aliases`, `add_identifiers`, and `remove_identifiers`. Removals must belong
@@ -132,7 +174,7 @@ Aliases/identifiers retain creation time and optional request `created_by`.
 Neither metadata correction nor a bare entity/empty request rebuilds the graph
 or increments `knowledge_version`; they do not repair an unavailable graph.
 
-Every membership result and knowledge read includes `support`, including `[]`.
+Every membership/fact result and knowledge read includes `support`, including `[]`.
 Support always cites a **whole canonical passage**, not an arbitrary snippet.
 Optional `quote` must equal the entire text exactly. Optional `start_byte` and
 `end_byte` must both be supplied and match that passage's zero-based half-open
@@ -140,18 +182,27 @@ UTF-8 byte range in its immutable revision. Old revision evidence stays valid
 after new ingestion. Duplicate support IDs, bad quotes/offsets, undefined refs,
 unknown vocabulary, or a late invalid item roll back the entire request.
 
-Input is bounded to 1 MiB UTF-8 bytes, 1000 items, and 1000 entries in each
+Input is bounded to 1 MiB aggregate UTF-8 bytes (including JSONL separators),
+1000 aggregate items, and 1000 entries in each
 metadata/support array. Names, aliases, and identifier values contain 1-1024
 Unicode scalar values and no NUL; supplied `created_by` contains 1-128 Unicode
 scalar values. Unknown and duplicate JSON fields are rejected. `--describe`
-generates the execution JSON Schema, a minimal example, and current vocabulary.
+generates the execution JSON Schema, a minimal example, current vocabulary,
+JSONL examples/framing rules, and stateful/lexical validation rules.
 `record` returns `schema_version`, `knowledge_version`, summary counts, and one
 indexed result per input item. Entity reads include complete metadata and active
 type/membership/fact IDs. Knowledge reads include subtype, schema version,
 creation/withdrawal state, and hydrated support; retained withdrawn memberships
-remain readable.
+remain readable. Summary adds `facts_created`. A fact result has
+`kind`, `index`, `knowledge_id`, `subject_entity_id`, `predicate_id`, `object`,
+and `support`. Relationship object output is `{"entity_id":"entity:2"}`; literal
+output is, for example,
+`{"literal_kind":"string","literal":"approved","literal_json":"\"approved\""}`.
+Fact get returns `kind: knowledge`, `subtype: fact`, common provenance/withdrawal/
+support fields and the same subject, predicate and object. Membership fields are
+unchanged. Literal JSON is the exact canonical SQLite representation.
 
-Membership publication builds from the pending SQLite transaction, then activates
+Membership/fact publication builds from the pending SQLite transaction, then activates
 the verified graph and commits under the publication lock. A reported commit
 failure restores the previous graph; crashes in the activation/commit window
 fail closed until explicit `graph rebuild`. **A nonzero exit can follow a
@@ -175,10 +226,11 @@ cargo run --bin commonplace -- --store .commonplace graph rebuild --json
 
 `graph schema` describes the canonical RDF 1.1 mapping, ID namespaces, property
 datatypes, evidence fields, and SELECT examples without opening a store. Rebuild
-currently projects active type memberships, their referenced entities/types, and
+projects active type memberships and facts, their referenced entities/types/predicates, and
 complete cited passage/revision/document fields from SQLite, including pending
-`record` writes. Active facts fail explicitly rather than being omitted;
-fact authoring/projection belongs to P6. Unused vocabulary and bare entities do
+`record` writes. Facts use distinct knowledge IRIs with predicate/object links
+and canonical typed literals, not shortcut triples or synthetic value nodes.
+Unused vocabulary and bare entities do
 not appear in the default graph. Empty stores retain version-zero metadata in
 the query-visible reserved named graph `urn:commonplace:metadata`.
 
@@ -493,8 +545,9 @@ COMMONPLACE_MODEL_CACHE=/absolute/path/to/prepared/pinned-models \
 The file check runs the public binary over multiple files, repeats ingestion,
 makes metadata and content revisions, reads exact old/new evidence, and checks current
 FTS/vector IDs on a version-2 store. It verifies ingestion leaves graph files
-unchanged, then records a multiply-typed entity through the public CLI, compares
-old/new passage citations with exact reads, and repeats after rebuild/reopen.
+unchanged, then records a multiply-typed entity, cited relationship and literal
+decision through the public CLI, compares old/new passage citations with exact
+reads, and repeats after rebuild/reopen.
 The stream check runs real
 nonempty stdin/JSONL submissions, unchanged and metadata-only reruns, partial
 failures, exact old reads, and current index/unchanged graph checks. The file
