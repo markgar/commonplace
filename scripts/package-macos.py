@@ -89,7 +89,7 @@ def main():
     build_log = dist / f"{name}.build.log"
     require(not build_log.exists(), f"refusing to overwrite {build_log}")
     command = SANDBOX + ["cargo", "build", "--release", "--bin", "commonplace",
-                         "--locked", "--offline", "-j2"]
+                         "--locked", "--offline", "-j1"]
     print(f"Building {commit}; log: {build_log}", flush=True)
     with build_log.open("x") as log:
         subprocess.run(command, cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT, check=True)
@@ -167,8 +167,22 @@ def main():
         (bundle / "USAGE.txt").write_text(
             "Local macOS arm64 development package; not a published or notarized release.\n"
             "Verify SHA256SUMS after extraction. No Python, Cargo or compiler is used by commonplace.\n"
-            "Set COMMONPLACE_MODEL_CACHE to the absolute path of this bundle's pinned-models.\n"
-            "Run the absolute commonplace path with --store /absolute/new/store init.\n"
+            "From the extracted package directory, install without replacing an existing installation:\n\n"
+            f'release_dir="$HOME/.local/share/commonplace/releases/{name}"\n'
+            'bin="$HOME/.local/bin/commonplace"\n'
+            'test ! -e "$release_dir" && test ! -e "$bin" || exit 1\n'
+            'mkdir -p "$(dirname "$release_dir")" "$(dirname "$bin")"\n'
+            'cp -R . "$release_dir"\n'
+            'install -m 755 "$release_dir/commonplace" "$bin"\n'
+            '(cd "$release_dir" && shasum -a 256 -c SHA256SUMS)\n'
+            'cmp "$release_dir/commonplace" "$bin"\n\n'
+            "For every terminal or local agent process, supply the existing model-cache environment:\n\n"
+            'export PATH="$HOME/.local/bin:$PATH"\n'
+            'export COMMONPLACE_MODEL_CACHE="$release_dir/pinned-models"\n'
+            'store="$HOME/.local/share/commonplace/stores/personal"\n'
+            'commonplace --store "$store" init\n\n'
+            "Keep the store outside the release directory. Installation neither copies nor removes stores.\n"
+            "Retain the archive, checksum and provenance. Do not overwrite an installation implicitly.\n"
             "Use --help and the repository README for other public commands.\n"
             "Models are preseeded; no network is required. Missing/corrupt models fail explicitly.\n"
             "All five independent clean-target release gates remain unverified.\n"

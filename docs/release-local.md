@@ -23,7 +23,7 @@ export COMMONPLACE_MODEL_CACHE=/absolute/path/to/prepared/pinned-models
 python3 scripts/package-macos.py
 ```
 
-The helper builds the real application with `--release --locked --offline -j2`
+The helper builds the real application with `--release --locked --offline -j1`
 under network denial. It checks the pinned native ONNX Runtime cache before
 building. Missing Rust/native/model caches are blockers, not permission to fetch
 from alternate sources. The build environment deliberately excludes native
@@ -64,15 +64,58 @@ uses read-only hardlinks to create two model-cache variants. These are not links
 to another session's executable or original model cache. Never corrupt or
 modify a linked model; use an independent disposable copy for corruption checks.
 
+## Stable local installation and persistent store
+
+`USAGE.txt` inside the archive is a self-contained install guide. The following
+uses only standard macOS utilities, requires no administrator access, and
+refuses to replace an existing installation. Start after extraction and checksum
+verification above:
+
+```sh
+release_dir="$HOME/.local/share/commonplace/releases/$(basename "$bundle")"
+bin="$HOME/.local/bin/commonplace"
+test ! -e "$release_dir" && test ! -e "$bin" || exit 1
+mkdir -p "$(dirname "$release_dir")" "$(dirname "$bin")"
+cp -R "$bundle" "$release_dir"
+install -m 755 "$release_dir/commonplace" "$bin"
+(cd "$release_dir" && shasum -a 256 -c SHA256SUMS)
+cmp "$release_dir/commonplace" "$bin"
+```
+
+The executable is now the stable path `$HOME/.local/bin/commonplace`, not a
+worktree, `target`, temporary-directory or Copilot-session binary. The versioned
+release directory retains the immutable models and provenance. For each
+terminal or local agent process, provide the existing environment variables:
+
+```sh
+export PATH="$HOME/.local/bin:$PATH"
+export COMMONPLACE_MODEL_CACHE="$release_dir/pinned-models"
+store="$HOME/.local/share/commonplace/stores/personal"
+commonplace --store "$store" init
+commonplace --store "$store" ingest /absolute/path/to/notes
+commonplace --store "$store" search "release planning"
+```
+
+For a later process, use the exact installed absolute model path rather than
+assuming that its shell still has `release_dir`. Agents may instead invoke the
+absolute executable and set `COMMONPLACE_MODEL_CACHE` explicitly in their
+process environment; no shell profile or new configuration file is required.
+The user store is a separate persistent directory, never part of a release
+archive or replacement operation. Keep the archive/checksum and do not silently
+overwrite an existing installation or mutate/migrate an incompatible store.
+The local validation installs into a disposable isolated HOME using these same
+paths; it does not install into the developer's real HOME or personal store.
+
 ## Run the extracted binary, not Cargo's binary
 
 Run the README format, Clippy and ordinary test checks locally with locked,
-offline Cargo and `-j2` for builds. Then compile the existing integration-test
-controllers without running them:
+offline Cargo and `-j1` for builds. Run tests with `--test-threads=1` and keep
+builds and real-model invocations sequential to reduce thermal load. Then compile
+the existing integration-test controllers without running them:
 
 ```sh
 sandbox-exec -p '(version 1)(allow default)(deny network*)' \
-  cargo test --locked --offline -j2 --no-run --message-format=json \
+  cargo test --locked --offline -j1 --no-run --message-format=json \
   > "$work/test-build.jsonl"
 ```
 
@@ -240,7 +283,7 @@ In the dedicated Windows checkout, build only into its own absolute target:
 
 ```powershell
 $env:CARGO_TARGET_DIR = Join-Path (Get-Location).Path 'target'
-cargo build --release --locked --offline -j2 --bin commonplace
+cargo build --release --locked --offline -j1 --bin commonplace
 ```
 
 This is a future approved native-host command, not executed macOS evidence.
