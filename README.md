@@ -7,7 +7,8 @@ hybrid SQLite search, explicitly authored cited knowledge, and local graph
 queries.
 
 The Rust implementation supports store initialization, additive vocabulary,
-file and generic stdin/JSONL ingestion, exact document/revision/passage reads,
+file and generic stdin/JSONL ingestion, atomic cited entity/type authoring,
+authoritative reads,
 and read-only RDF graph queries and rebuild:
 
 ```sh
@@ -84,9 +85,83 @@ failures return exit 1. Execution failures are JSON on stderr; successes are JSO
 on stdout. Argument syntax errors use the standard CLI usage diagnostics.
 Checks and reads use consistent read-only SQLite snapshots and create no
 application-owned lock state; SQLite may maintain its own WAL/SHM sidecars.
-Descriptions never open the store. Vocabulary operations neither load inference
+Schema/ingest descriptions never open the store; record descriptions read current
+vocabulary. Vocabulary operations neither load inference
 nor open or rebuild Oxigraph, and remain available when derived graph state is
 missing or corrupt.
+
+## Cited entities and types
+
+After ingesting evidence and applying your vocabulary, create `record.json`:
+
+```json
+{
+  "created_by": "manual",
+  "items": [
+    {"kind": "entity", "ref": "riley", "name": "Riley",
+     "aliases": ["R"], "identifiers": [{"scheme": "email", "value": "riley@example.test"}]},
+    {"kind": "type_membership", "entity": {"ref": "riley"},
+     "entity_type": "person", "support": [{"passage_id": "passage:1"}]}
+  ]
+}
+```
+
+Use your actual passage IDs and declared type/scheme names:
+
+```sh
+cargo run --bin commonplace -- --store .commonplace record --describe --json
+cargo run --bin commonplace -- --store .commonplace record record.json --json
+cargo run --bin commonplace -- --store .commonplace get entity:1
+cargo run --bin commonplace -- --store .commonplace get knowledge:1
+```
+
+One JSON request is atomic, including all entities, metadata, memberships, and
+graph publication. Repeat membership items to assign multiple types; successful
+repeated writes receive distinct knowledge IDs. Entity creation is explicit and
+never merges by name. Memberships resolve exactly one selector: `{"id":"entity:1"}`,
+`{"identifier":{"scheme":"email","value":"riley@example.test"}}`, `{"name":"R"}`,
+or `{"ref":"riley"}`. Exact case-sensitive name/alias matches must be unambiguous.
+Local refs match `[A-Za-z][A-Za-z0-9_]{0,63}`, refer only to preceding entity items,
+and last only for this request. Fact authoring, `record` JSONL, withdrawal, and
+name changes are not supported by this release (`ingest --jsonl` is supported).
+
+`entity_metadata` items require `entity_id` and accept `add_aliases`,
+`remove_aliases`, `add_identifiers`, and `remove_identifiers`. Removals must belong
+to that entity. Duplicates/conflicting additions and removals fail; adding an
+already-owned value is a no-op. Identifiers cannot belong to two entities.
+Aliases/identifiers retain creation time and optional request `created_by`.
+Neither metadata correction nor a bare entity/empty request rebuilds the graph
+or increments `knowledge_version`; they do not repair an unavailable graph.
+
+Every membership result and knowledge read includes `support`, including `[]`.
+Support always cites a **whole canonical passage**, not an arbitrary snippet.
+Optional `quote` must equal the entire text exactly. Optional `start_byte` and
+`end_byte` must both be supplied and match that passage's zero-based half-open
+UTF-8 byte range in its immutable revision. Old revision evidence stays valid
+after new ingestion. Duplicate support IDs, bad quotes/offsets, undefined refs,
+unknown vocabulary, or a late invalid item roll back the entire request.
+
+Input is bounded to 1 MiB UTF-8 bytes, 1000 items, and 1000 entries in each
+metadata/support array. Names, aliases, and identifier values contain 1-1024
+Unicode scalar values and no NUL; supplied `created_by` contains 1-128 Unicode
+scalar values. Unknown and duplicate JSON fields are rejected. `--describe`
+generates the execution JSON Schema, a minimal example, and current vocabulary.
+`record` returns `schema_version`, `knowledge_version`, summary counts, and one
+indexed result per input item. Entity reads include complete metadata and active
+type/membership/fact IDs. Knowledge reads include subtype, schema version,
+creation/withdrawal state, and hydrated support; retained withdrawn memberships
+remain readable.
+
+Membership publication builds from the pending SQLite transaction, then activates
+the verified graph and commits under the publication lock. A reported commit
+failure restores the previous graph; crashes in the activation/commit window
+fail closed until explicit `graph rebuild`. **A nonzero exit can follow a
+successful commit:** `post_commit_cleanup` means previous-directory removal or
+final directory sync failed. Response-delivery errors use `internal_error`.
+Their messages identify committed IDs/version and say not to retry `record`;
+inspect those IDs with `get`, and rebuild for cleanup failures. If the process or
+output stream dies, receipt delivery cannot be guaranteed: inspect canonical
+state before retrying a non-idempotent request.
 
 ## Graph queries and explicit rebuild
 
@@ -102,8 +177,8 @@ cargo run --bin commonplace -- --store .commonplace graph rebuild --json
 `graph schema` describes the canonical RDF 1.1 mapping, ID namespaces, property
 datatypes, evidence fields, and SELECT examples without opening a store. Rebuild
 currently projects active type memberships, their referenced entities/types, and
-complete cited passage/revision/document fields from SQLite. There is no public
-authoring command yet. Active facts fail explicitly rather than being omitted;
+complete cited passage/revision/document fields from SQLite, including pending
+`record` writes. Active facts fail explicitly rather than being omitted;
 fact authoring/projection belongs to P6. Unused vocabulary and bare entities do
 not appear in the default graph. Empty stores retain version-zero metadata in
 the query-visible reserved named graph `urn:commonplace:metadata`.
@@ -208,7 +283,7 @@ with a fixed 1024-byte target and UTF-8-safe boundaries. Empty files are valid a
 have zero passages. `get` returns a complete document with all revision IDs, a
 complete revision with its text/metadata and passage IDs, or an exact passage
 citation with source metadata and half-open byte offsets. It does not load
-models or truncate records. Entity and knowledge reads are not yet implemented.
+models or truncate records. Entity and knowledge reads are described above.
 
 Ingestion uses the common envelope with `complete`, `partial`, or `failed` status.
 Its `result` contains `summary` counts (`added`, `updated`, `unchanged`, `failed`)
@@ -370,8 +445,9 @@ COMMONPLACE_MODEL_CACHE=/absolute/path/to/prepared/pinned-models \
 The file check runs the public binary over multiple files, repeats ingestion,
 makes metadata and content revisions, reads exact old/new evidence, and checks current
 FTS/vector IDs on a version-2 store. It verifies ingestion leaves graph files
-unchanged, then rebuilds empty and fixture-backed membership graphs and compares
-their old/new passage citations with exact reads. The stream check runs real
+unchanged, then records a multiply-typed entity through the public CLI, compares
+old/new passage citations with exact reads, and repeats after rebuild/reopen.
+The stream check runs real
 nonempty stdin/JSONL submissions, unchanged and metadata-only reruns, partial
 failures, exact old reads, and current index/unchanged graph checks. The file
 check also verifies offline hits through the standard `HF_HOME` cache.
