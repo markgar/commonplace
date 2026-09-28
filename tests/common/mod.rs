@@ -104,6 +104,13 @@ impl Store {
         assert!(changed.is_empty(), "changed files: {changed:?}");
     }
 
+    pub fn graph_files(&self) -> BTreeMap<PathBuf, Vec<u8>> {
+        self.files()
+            .into_iter()
+            .filter(|(path, _)| path.starts_with(self.root.join("graph")))
+            .collect()
+    }
+
     pub fn vocabulary() -> Value {
         json!({
             "entity_types": [{"name":"person", "description":"A person"}, {"name":"company"}],
@@ -123,9 +130,13 @@ pub struct LockHolder(Child);
 
 impl LockHolder {
     pub fn start(store: &Store) -> Self {
-        let ready = store.directory.path().join("lock-ready");
+        Self::start_named(store, "lock_holder", "lock-ready")
+    }
+
+    pub fn start_named(store: &Store, helper: &str, ready_name: &str) -> Self {
+        let ready = store.directory.path().join(ready_name);
         let child = Command::new(std::env::current_exe().unwrap())
-            .args(["--ignored", "--exact", "lock_holder", "--nocapture"])
+            .args(["--ignored", "--exact", helper, "--nocapture"])
             .env("COMMONPLACE_TEST_STORE", &store.root)
             .env("COMMONPLACE_TEST_READY", &ready)
             .stdout(Stdio::null())
@@ -141,7 +152,23 @@ impl LockHolder {
             );
             std::thread::sleep(Duration::from_millis(10));
         }
+
         holder
+    }
+}
+
+pub fn wait_for_exit(child: &mut Child, timeout: Duration) -> std::process::ExitStatus {
+    let start = Instant::now();
+    loop {
+        if let Some(status) = child.try_wait().expect("poll child") {
+            return status;
+        }
+        if start.elapsed() > timeout {
+            child.kill().expect("terminate overdue child");
+            child.wait().expect("reap overdue child");
+            panic!("child exceeded {timeout:?}");
+        }
+        std::thread::sleep(Duration::from_millis(5));
     }
 }
 

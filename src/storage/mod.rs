@@ -1,4 +1,5 @@
 pub mod database;
+pub(crate) mod graph_snapshot;
 pub mod vocabulary;
 
 use std::path::Path;
@@ -18,9 +19,9 @@ pub(crate) struct StoreConfig {
 impl StoreConfig {
     pub(crate) fn expected() -> Self {
         Self {
-            format: "commonplace-config/1".into(),
+            format: "commonplace-config/2".into(),
             database: "commonplace.sqlite3".into(),
-            graph: "graph/current.grafeo".into(),
+            graph: "graph/current".into(),
         }
     }
 
@@ -48,10 +49,10 @@ impl StoreConfig {
                 path.display()
             )));
         }
-        if !root.join("graph/current.grafeo").is_file() {
+        if root.join("graph/current.grafeo").try_exists()? {
             return Err(CommonplaceError::Conflict(format!(
-                "initialized store is missing its graph: {}",
-                root.join("graph/current.grafeo").display()
+                "incompatible version-1 graph layout in {}; create a fresh store",
+                root.display()
             )));
         }
         Ok(())

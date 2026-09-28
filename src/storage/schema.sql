@@ -1,6 +1,6 @@
 CREATE TABLE store_state (
     singleton         INTEGER PRIMARY KEY CHECK (singleton = 1),
-    format            TEXT NOT NULL CHECK (format = 'commonplace-store/1'),
+    format            TEXT NOT NULL CHECK (format = 'commonplace-store/2'),
     schema_version    INTEGER NOT NULL DEFAULT 0 CHECK (schema_version >= 0),
     knowledge_version INTEGER NOT NULL DEFAULT 0 CHECK (knowledge_version >= 0),
     created_at        TEXT NOT NULL

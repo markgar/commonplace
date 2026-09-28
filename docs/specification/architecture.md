@@ -199,8 +199,9 @@ There are no provider registries or runtime profile selectors.
 
 ### 5.3 Graph engine
 
-`GraphEngine` is a narrow internal trait implemented by
-`OxigraphGraphEngine`. It:
+`GraphRuntime` and its private Oxigraph projection/query modules form one direct
+internal graph boundary. A separate engine trait is not required without a
+current consumer; there is only one stock Oxigraph implementation. This boundary:
 
 - builds a graph from a complete `GraphSnapshot`;
 - verifies the candidate graph;

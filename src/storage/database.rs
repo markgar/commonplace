@@ -13,7 +13,7 @@ use time::format_description::well_known::Rfc3339;
 
 use crate::{CommonplaceError, Result};
 
-pub const STORE_FORMAT: &str = "commonplace-store/1";
+pub const STORE_FORMAT: &str = "commonplace-store/2";
 
 static REGISTER_SQLITE_VEC: Once = Once::new();
 
@@ -173,6 +173,19 @@ fn validate_connection(connection: &Connection) -> Result<()> {
         return Err(CommonplaceError::Conflict(format!(
             "unsupported store format {format:?}; expected {STORE_FORMAT:?}"
         )));
+    }
+    let (state_rows, state_ddl): (i64, String) = connection
+        .query_row(
+            "SELECT (SELECT count(*) FROM store_state), sql
+             FROM sqlite_schema WHERE type='table' AND name='store_state'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(storage_error)?;
+    if state_rows != 1 || !state_ddl.contains(&format!("CHECK (format = '{STORE_FORMAT}')")) {
+        return Err(CommonplaceError::Conflict(
+            "incompatible store_state layout; create a fresh store".into(),
+        ));
     }
     if schema_version < 0 || knowledge_version < 0 {
         return Err(CommonplaceError::Conflict(
