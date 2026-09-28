@@ -626,8 +626,191 @@ fn real_model_ingest_get_offline() {
         citations
     );
     assert_eq!(execute(&["init"])["status"], "unchanged");
+    let removed_document = execute(&["get", doc])["result"].clone();
+    let source_key = removed_document["source_key"].as_str().unwrap();
+    assert!(source_key.starts_with("file://"));
+    let mut removed_passages = Vec::new();
+    for revision in removed_document["revision_ids"].as_array().unwrap() {
+        let revision = execute(&["get", revision.as_str().unwrap()]);
+        removed_passages.extend(
+            revision["result"]["passage_ids"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .cloned(),
+        );
+    }
+    let unrelated_doc = added["result"]["items"][2]["document_id"].as_str().unwrap();
+    let unrelated_before = execute(&["get", unrelated_doc]);
+    let unrelated_revision = unrelated_before["result"]["current_revision_id"]
+        .as_str()
+        .unwrap();
+    let unrelated_passage =
+        execute(&["get", unrelated_revision])["result"]["passage_ids"][0].clone();
+    let input = store.input(&json!({"items":[
+        {"kind":"type_membership","entity":{"id":"entity:1"},"entity_type":"person",
+            "support":[{"passage_id":passages[0]},{"passage_id":unrelated_passage}]},
+        {"kind":"type_membership","entity":{"id":"entity:1"},"entity_type":"lead",
+            "support":[{"passage_id":unrelated_passage}]}
+    ]}));
+    let extra = execute(&["record", input.to_str().unwrap()]);
+    let mixed_id = extra["result"]["items"][0]["knowledge_id"]
+        .as_str()
+        .unwrap();
+    let unrelated_id = extra["result"]["items"][1]["knowledge_id"]
+        .as_str()
+        .unwrap();
+    let untouched_knowledge = execute(&["get", unrelated_id]);
+    let expected_version = extra["result"]["knowledge_version"].as_i64().unwrap() + 1;
+    let removed = execute(&["remove", "--source-key", source_key, "--json"]);
+    assert_eq!(
+        removed["result"],
+        json!({
+            "source_key":source_key,"document_id":doc,"deleted_revisions":3,
+            "deleted_passages":removed_passages.len(),"detached_evidence":3,
+            "affected_knowledge_ids":["knowledge:1",mixed_id],"knowledge_version":expected_version
+        })
+    );
+    for id in std::iter::once(json!(doc))
+        .chain(
+            removed_document["revision_ids"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .cloned(),
+        )
+        .chain(removed_passages.iter().cloned())
+    {
+        store.failure(&["get", id.as_str().unwrap()], "not_found", 2);
+    }
+    assert!(a.is_file(), "remove must not delete the original file");
+    let sqlite = SqliteDatabase::read(&store.root).unwrap();
+    let connection = sqlite.connection();
+    let deleted_document_id = doc.strip_prefix("doc:").unwrap().parse::<i64>().unwrap();
+    for sql in [
+        "SELECT count(*) FROM documents WHERE document_id=?1",
+        "SELECT count(*) FROM document_revisions WHERE document_id=?1",
+    ] {
+        assert_eq!(
+            connection
+                .query_row(sql, [deleted_document_id], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
+    for passage in &removed_passages {
+        let id = passage
+            .as_str()
+            .unwrap()
+            .strip_prefix("passage:")
+            .unwrap()
+            .parse::<i64>()
+            .unwrap();
+        for (table, key) in [
+            ("passages", "passage_id"),
+            ("passage_fts", "rowid"),
+            ("passage_vectors", "passage_id"),
+            ("knowledge_item_evidence", "passage_id"),
+        ] {
+            assert_eq!(
+                connection
+                    .query_row(
+                        &format!("SELECT count(*) FROM {table} WHERE {key}=?1"),
+                        [id],
+                        |r| r.get::<_, i64>(0)
+                    )
+                    .unwrap(),
+                0,
+                "{table}: {id}"
+            );
+        }
+    }
+    let current_ids: Vec<i64> = connection.prepare(
+        "SELECT passage_id FROM passages p JOIN document_revisions r USING(revision_id)
+        WHERE revision_number=(SELECT max(revision_number) FROM document_revisions WHERE document_id=r.document_id)
+        ORDER BY passage_id"
+    ).unwrap().query_map([], |r|r.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap();
+    for sql in [
+        "SELECT rowid FROM passage_fts ORDER BY rowid",
+        "SELECT passage_id FROM passage_vectors ORDER BY passage_id",
+    ] {
+        let indexed: Vec<i64> = connection
+            .prepare(sql)
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(indexed, current_ids);
+    }
+    drop(sqlite);
+    let retained = execute(&["get", "knowledge:1"]);
+    assert_eq!(retained["result"]["support"], json!([]));
+    assert_eq!(retained["result"]["withdrawn_at"], Value::Null);
+    let mixed = execute(&["get", mixed_id]);
+    assert_eq!(mixed["result"]["support"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        mixed["result"]["support"][0]["passage_id"],
+        unrelated_passage
+    );
+    assert_eq!(execute(&["get", unrelated_id]), untouched_knowledge);
+    assert_eq!(execute(&["get", unrelated_doc]), unrelated_before);
+    assert_eq!(
+        execute(&["graph", "query", citation_query])["result"]["rows"],
+        json!([])
+    );
+    let optional_query = "PREFIX c:<urn:commonplace:property:>
+        SELECT ?kind ?p WHERE {<urn:commonplace:knowledge:1> c:kind ?kind
+            OPTIONAL {<urn:commonplace:knowledge:1> c:evidence ?p}}";
+    let retained_graph = execute(&["graph", "query", optional_query])["result"].clone();
+    assert_eq!(retained_graph["rows"].as_array().unwrap().len(), 1);
+    assert_eq!(retained_graph["rows"][0][0]["value"], "type_membership");
+    assert_eq!(retained_graph["rows"][0][1], Value::Null);
+    let mixed_query = format!(
+        "PREFIX c:<urn:commonplace:property:>
+        SELECT ?p WHERE {{<urn:commonplace:{mixed_id}> c:evidence ?p}}"
+    );
+    let mixed_graph = execute(&["graph", "query", &mixed_query])["result"].clone();
+    assert_eq!(mixed_graph["rows"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        mixed_graph["rows"][0][0]["value"],
+        format!("urn:commonplace:{}", unrelated_passage.as_str().unwrap())
+    );
+    let searched = execute(&["search", "release planning"]);
+    assert!(!searched["result"]["items"].as_array().unwrap().is_empty());
+    assert!(
+        searched["result"]["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item["document_id"] != doc
+                && !removed_passages.contains(&item["passage_id"]))
+    );
+    store.failure(&["remove", "--source-key", source_key], "not_found", 2);
+    assert_eq!(execute(&["init"])["status"], "unchanged");
+    assert_eq!(
+        execute(&["graph", "rebuild"])["result"]["knowledge_version"],
+        expected_version
+    );
+    assert_eq!(
+        execute(&["graph", "query", optional_query])["result"],
+        retained_graph
+    );
+    assert_eq!(
+        execute(&["graph", "query", &mixed_query])["result"],
+        mixed_graph
+    );
+    let again = execute(&["ingest", a.to_str().unwrap()]);
+    assert_eq!(again["result"]["summary"]["added"], 1);
+    assert_ne!(again["result"]["items"][0]["document_id"], doc);
+    assert_eq!(again["result"]["items"][0]["source_key"], source_key);
+    assert_eq!(execute(&["get", "knowledge:1"]), retained);
+    assert_eq!(
+        execute(&["graph", "query", optional_query])["result"],
+        retained_graph
+    );
     println!(
-        "PASS pinned local model; v2 multi-file public binary, unchanged/content/metadata revisions, exact UTF-8 get, current FTS/vector parity, strict override and default HF cache hits, unchanged graph bytes during ingest, public multiply-typed record/get/SPARQL/rebuild/reopen and exact old/new citation parity; cache={}",
+        "PASS pinned local model; v2 multi-file public binary, unchanged/content/metadata revisions, exact UTF-8 get, current FTS/vector parity, strict override and default HF cache hits, unchanged graph bytes during ingest, public multiply-typed record/get/SPARQL/rebuild/reopen and exact old/new citation parity; explicit file-key removal of all revisions/index/evidence, retained active empty/mixed support and unrelated citations, public search exclusion, reopen/rebuild, and new reingest identity; cache={}",
         cache.display()
     );
 }
