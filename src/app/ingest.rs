@@ -125,12 +125,13 @@ fn stage<T>(name: &'static str, result: Result<T>) -> std::result::Result<T, Ite
 
 pub fn ingest(
     root: &Path,
-    items: impl ExactSizeIterator<Item = InputItem>,
+    items: impl Iterator<Item = InputItem>,
     model: &mut impl EmbeddingModel,
     config: &OperationConfig,
 ) -> Result<IngestResult> {
     config.validate()?;
-    if items.len() > config.maximum_documents {
+    let (minimum, maximum) = items.size_hint();
+    if maximum == Some(minimum) && minimum > config.maximum_documents {
         return Err(CommonplaceError::LimitExceeded(format!(
             "request exceeds the {}-document limit",
             config.maximum_documents
@@ -143,7 +144,14 @@ pub fn ingest(
         items: Vec::new(),
         exit_code: 0,
     };
-    for item in items {
+    for (index, mut item) in items.enumerate() {
+        let exceeded = index >= config.maximum_documents;
+        if exceeded && item.document.is_ok() {
+            item.document = Err(CommonplaceError::LimitExceeded(format!(
+                "request exceeds the {}-document limit",
+                config.maximum_documents
+            )));
+        }
         let source_key = item.source_key.clone();
         let outcome = (|| {
             if let Some(key) = &source_key
@@ -215,6 +223,9 @@ pub fn ingest(
                     }),
                 });
             }
+        }
+        if exceeded {
+            break;
         }
     }
     Ok(result)
