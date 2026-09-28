@@ -120,7 +120,7 @@ validation runs, not the supported release targets or required release evidence.
 | [P6 (#17)](https://github.com/markgar/commonplace/issues/17) | Record cited relationships and literal facts atomically | P5b | Knowledge lane |
 | [P7 (#20)](https://github.com/markgar/commonplace/issues/20) | Withdraw knowledge without leaving invalid active facts | P6 | Knowledge lane |
 | [P8 (#21)](https://github.com/markgar/commonplace/issues/21) | Remove sources while preserving authored knowledge | P5b | Integration handoff |
-| [P9 (#18)](https://github.com/markgar/commonplace/issues/18) | Ingest stdin, JSON Lines, and manifest inputs | P3 | Source lane |
+| [P9 (#18)](https://github.com/markgar/commonplace/issues/18) | Submit normalized text through stdin and JSON Lines | P3 | Source lane |
 | [P10 (#22)](https://github.com/markgar/commonplace/issues/22) | Demonstrate the complete release on supported targets | P4, P7, P8, P9 | Integrator and packet owners |
 
 Recommended schedule:
@@ -493,18 +493,24 @@ support. P10 requires both packets and this combined evidence.
 **Outcome:** external tools can submit exact text and stable source keys without
 a new indexing path.
 
-**Work:** add stdin, JSON Lines, and manifest adapters to P3's canonical pipeline.
+**Work:** add generic stdin and JSON Lines inputs to P3's canonical pipeline.
 Complete their generated descriptions, metadata handling, input limits, duplicate
 key handling, and aggregate results. These are connector-facing inputs, not
-built-in email, PDF, web, or service connectors.
+built-in email, PDF, web, or service connectors. Acquisition and extraction remain
+caller-owned. Manifest input is explicitly deferred outside current P9/release
+acceptance: the current agent workflow needs normalized submission, already
+covered by stdin and replayable JSON Lines, not another batch mapping format.
 
 **Primary surfaces:** source adapters, ingestion input validators, and CLI.
 
 **Acceptance:** stream a non-file key, rerun unchanged, then change only metadata.
 A malformed JSON Lines item or duplicate streamed key fails that item without
-undoing prior publications. Invalid command options or manifest envelopes fail
-before item processing. Verify bounded reading and document/request limits,
-exact text preservation, and the same revision/index behavior as file ingestion.
+undoing prior publications. Invalid command options fail before item processing.
+Oversized lines and document-cap overflow terminate with a failed item while
+preserving prior successes, without unbounded draining. Verify strict fields,
+exclusive input modes, bounded reading and document/request limits, exact text
+preservation, and the same revision/index behavior as file ingestion. Preserve
+file-mode known-count preflight and all existing file behavior.
 
 ### 3.13 P10: release closure
 

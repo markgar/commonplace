@@ -238,7 +238,7 @@ pub fn read_file(
     })
 }
 
-fn read_utf8(reader: impl Read, maximum_bytes: usize) -> Result<String> {
+pub(super) fn read_utf8(reader: impl Read, maximum_bytes: usize) -> Result<String> {
     let bound = u64::try_from(maximum_bytes)
         .ok()
         .and_then(|value| value.checked_add(1))

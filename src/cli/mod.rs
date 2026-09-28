@@ -35,8 +35,8 @@ enum Command {
         #[command(subcommand)]
         command: GraphCommand,
     },
-    /// Ingest local UTF-8 files; each file succeeds or fails independently.
-    Ingest(ingest::IngestArgs),
+    /// Ingest UTF-8 files or caller-prepared stdin/JSONL; each document succeeds or fails independently.
+    Ingest(Box<ingest::IngestArgs>),
     /// Read document metadata, revision text, or an exact passage.
     Get { id: String },
     /// Apply or inspect your vocabulary (entity types, predicates, and identifiers).
@@ -138,7 +138,7 @@ fn execute(cli: Cli) -> Result<CommandResponse> {
                 CommandResult::GraphRebuild(graph::rebuild(&cli.store)?),
             )),
         },
-        Command::Ingest(args) => ingest::execute(&cli.store, args),
+        Command::Ingest(args) => ingest::execute(&cli.store, *args),
         Command::Get { id } => Ok(CommandResponse::new(
             "get",
             "complete",
@@ -243,7 +243,7 @@ mod tests {
             ),
             (
                 vec!["commonplace", "ingest", "--help"],
-                "each file succeeds or fails independently",
+                "each document succeeds or fails independently",
             ),
             (
                 vec!["commonplace", "get", "--help"],
