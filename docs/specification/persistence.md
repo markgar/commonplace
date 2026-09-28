@@ -112,6 +112,33 @@ Passage offsets are zero-based, half-open UTF-8 byte offsets into revision text.
 Application validation confirms that offsets are character boundaries and select
 exactly the stored passage text.
 
+### First-ingestion representation
+
+P3 completes the initial source representation under the adopted
+`commonplace-store/2` format; P5a owns the format-marker transition. Previously
+initialized empty stores have no source representation to reinterpret. There is
+no migration or second representation path.
+
+The fixed passage target is **1024 UTF-8 bytes**. Paragraphs end after a blank
+LF or CRLF line (a line containing only spaces/tabs is blank); all delimiter bytes
+remain in the preceding paragraph. The final unterminated portion is also a
+paragraph. Consecutive paragraph units are greedily accumulated while their
+combined length is at most the target. Before an oversized paragraph, flush any
+pending whole paragraphs. Split the oversized paragraph into nonoverlapping
+windows ending at the last UTF-8 character boundary at or before the target;
+emit its final remainder separately. Ordinals start at zero. Every byte is
+covered exactly once, with no empty passages; empty source text has zero passages.
+Golden tests pin these boundaries and the existing section 14 digest encoding.
+
+Embedding uses the P2 selection:
+`Qdrant/all-MiniLM-L6-v2-onnx@8f518e882455312b086101e60691f5e6e2f05c3c`,
+FastEmbed 7.1.0, mean pooling, token limit 256, finite unit-normalized 384-element
+vectors. SQLite vector values are little-endian IEEE-754 float32 blobs;
+sqlite-vec 0.1.6 and FTS5 `unicode61` remain unchanged. Runtime and tokenizer
+dependency pins live in Cargo manifests/lockfiles; immutable model-artifact
+checksums are enforced by the production provider. Changing these representation
+choices requires the explicit format treatment in section 15.
+
 ## 6. Search
 
 The lexical index is a contentless FTS5 table:

@@ -23,9 +23,17 @@ pub enum CommandResult {
     Apply(ApplyResult),
     Vocabulary(Vocabulary),
     Description(Description),
+    Ingest(crate::app::ingest::IngestResult),
+    Get(crate::app::get::Record),
 }
 
 impl CommandResponse {
+    pub fn exit_code(&self) -> u8 {
+        match &self.result {
+            CommandResult::Ingest(result) => result.exit_code,
+            _ => 0,
+        }
+    }
     pub fn new(operation: &'static str, status: &'static str, result: CommandResult) -> Self {
         Self {
             operation,

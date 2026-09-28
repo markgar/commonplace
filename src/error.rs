@@ -7,6 +7,10 @@ pub enum CommonplaceError {
     #[error("{0}")]
     InvalidInput(String),
     #[error("{0}")]
+    NotFound(String),
+    #[error("{0}")]
+    ModelUnavailable(String),
+    #[error("{0}")]
     LimitExceeded(String),
     #[error("{0}")]
     Conflict(String),
@@ -24,6 +28,8 @@ impl CommonplaceError {
     pub const fn code(&self) -> &'static str {
         match self {
             Self::InvalidInput(_) => "invalid_input",
+            Self::NotFound(_) => "not_found",
+            Self::ModelUnavailable(_) => "model_unavailable",
             Self::LimitExceeded(_) => "limit_exceeded",
             Self::Conflict(_) => "conflict",
             Self::Storage(_) | Self::Io(_) | Self::Serialization(_) => "internal_error",
@@ -33,9 +39,13 @@ impl CommonplaceError {
 
     pub const fn exit_code(&self) -> u8 {
         match self {
-            Self::InvalidInput(_) | Self::LimitExceeded(_) => 2,
+            Self::InvalidInput(_) | Self::LimitExceeded(_) | Self::NotFound(_) => 2,
             Self::Conflict(_) => 3,
-            Self::Storage(_) | Self::Graph(_) | Self::Io(_) | Self::Serialization(_) => 1,
+            Self::Storage(_)
+            | Self::Graph(_)
+            | Self::Io(_)
+            | Self::Serialization(_)
+            | Self::ModelUnavailable(_) => 1,
         }
     }
 }
