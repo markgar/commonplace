@@ -13,7 +13,7 @@ The product must let an agent:
 1. ingest one document or a collection of documents;
 2. retrieve relevant source passages through complete hybrid search;
 3. author cited entities, types, relationships, and literal facts;
-4. query the authored graph with read-only Cypher; and
+4. query the authored graph with read-only SPARQL SELECT; and
 5. resolve every cited result back to exact stored evidence.
 
 Deterministic processing belongs in the executable. Semantic interpretation
@@ -24,11 +24,12 @@ belongs to the calling agent.
 ### 2.1 Local and personal
 
 A knowledge base is a local directory containing authoritative SQLite state and
-a derived Grafeo graph. Anyone who can open the directory and run the CLI has
+a derived Oxigraph graph. Anyone who can open the directory and run the CLI has
 full access.
 
-There are no tenants, accounts, principals, grants, namespaces, or network
-service endpoints.
+There are no tenants, accounts, principals, grants, user-managed namespaces, or
+network service endpoints. Reserved RDF namespaces identify application data,
+not authorization boundaries.
 
 ### 2.2 Exact evidence
 
@@ -263,10 +264,10 @@ commonplace schema apply schema.json --json
 commonplace schema show --json
 ```
 
-Schema application changes SQLite only. It does not rebuild Grafeo because the
+Schema application changes SQLite only. It does not rebuild Oxigraph because the
 graph projects only vocabulary referenced by active knowledge.
 
-The physical SQLite and Grafeo schemas remain generic. User vocabulary is data,
+The physical SQLite schema and RDF mapping remain generic. User vocabulary is data,
 not generated database DDL.
 
 ## 7. Entities and authored knowledge
@@ -368,76 +369,116 @@ Any invalid or already withdrawn ID rejects the complete batch.
 
 ## 8. Graph projection and queries
 
-Grafeo is the required query engine and a derived store. It contains all active
-knowledge and enough source data to return citation-ready graph results.
+Stock Oxigraph is the required query engine and a derived store. Its ordinary
+RDF 1.1 projection contains all active knowledge and enough source data to return
+citation-ready graph results. No engine fork, alternate backend, RDF 1.2 triple
+terms, or inference rules are required.
 
-The projection has one stable generic shape:
+Every authored membership or fact has its own canonical knowledge-item IRI.
+Memberships link that item to an entity and entity type; facts link it to a
+subject, predicate, and entity or typed literal object. Evidence links the
+knowledge item to passages, their exact revisions, and documents. Equal facts
+remain distinct authored items even though RDF triples have set semantics.
+Literal assertions do not need separate value identities. Aliases and identifiers
+remain SQLite identity metadata and are not projected.
 
-| Element | Required properties |
-| --- | --- |
-| `Entity` | `id`, `entity_id`, `name` |
-| `EntityType` | `id`, `entity_type_id`, `name` |
-| `KnowledgeItem` | `id`, `knowledge_item_id`, `kind`, `schema_version` |
-| `Value` | `id`, `knowledge_item_id`, `literal_kind`, `literal_json` |
-| `Passage` | `id`, `passage_id`, `revision_id`, `ordinal`, `start_byte`, `end_byte`, `text`, `title`, `source_type`, `occurred_at`, `metadata_json` |
-| `Document` | `id`, `document_id`, `source_key` |
-| `HAS_TYPE` | `knowledge_item_id` |
-| `RELATIONSHIP` | `knowledge_item_id`, `predicate` |
-| `ASSERTION` | `knowledge_item_id`, `predicate` |
-| `SUPPORTED_BY`, `FROM` | no properties |
-
-Edges connect `(Entity)-[:HAS_TYPE]->(EntityType)`,
-`(Entity)-[:RELATIONSHIP]->(Entity)`,
-`(Entity)-[:ASSERTION]->(Value)`,
-`(KnowledgeItem)-[:SUPPORTED_BY]->(Passage)`, and
-`(Passage)-[:FROM]->(Document)`. A `Value` node is unique to its assertion and
-uses `value:<knowledge_item_id>` as its `id`. Other node IDs use the public
-tagged SQLite ID. Aliases and identifiers remain SQLite identity metadata and
-are not projected.
+[Persistence section 13](persistence.md#13-graph-snapshot-reads) owns the exact
+IRI, property, datatype, and source-field mapping. RDF IRIs reversibly identify
+canonical SQLite records; they do not change the public IDs accepted by `get`.
 
 Only entities participating in active knowledge are projected. Only passages
 supporting active knowledge and their documents are projected. Uncited corpus
 passages remain searchable in SQLite. Ordinary document ingestion does not
-rebuild Grafeo; source removal does because it can remove projected evidence.
+rebuild Oxigraph; source removal does because it can remove projected evidence.
 Only entity types and predicates referenced by active knowledge are projected;
 the complete vocabulary remains available through `commonplace schema show`.
 
-The complete logical shape is therefore:
-
-- entity and entity-type nodes;
-- generic relationship and assertion records;
-- value nodes for literal assertions;
-- knowledge-item nodes;
-- citation-ready passage nodes;
-- minimal document nodes;
-- evidence relationships from knowledge items to passages; and
-- predicate names and literal kinds on their semantic records.
+Knowledge and evidence occupy the default graph. The reserved named graph
+`urn:commonplace:metadata` stores the graph version, including for an empty
+knowledge base. It is deliberately visible to explicit `GRAPH` queries and graph
+discovery; it is neither hidden data nor a user vocabulary term.
 
 Every knowledge-changing operation builds and verifies a complete candidate
 graph before publishing it. Graph reads compare the graph's
 `knowledge_version` with SQLite and fail closed on mismatch.
 
 A crash in the narrow interval between graph activation and SQLite commit can
-leave a version mismatch. `commonplace graph rebuild` acquires the writer and graph
+leave a version mismatch; a crash between directory renames can leave the current
+graph absent. Missing, corrupt, or invalid-version graphs also fail closed.
+`commonplace graph rebuild` acquires the writer and graph
 publication locks, builds a complete candidate from committed SQLite state,
 verifies it, and activates it without changing `knowledge_version`. Failure
-leaves the previous graph untouched. There is no automatic repair, retained
+preserves the pre-operation current graph, when present. Rebuild repairs derived
+state only in a compatible store; it never converts an old store format.
+There is no automatic repair, retained
 graph-generation system, or general transaction coordinator.
 
-`commonplace graph query` accepts read-only Cypher through a native Grafeo
-`Role::ReadOnly` session. Mutation clauses are rejected by the graph engine
-rather than filtered only by string matching. Grafeo's native query deadline
-enforces the configured time budget, although cancellation may occur after the
-deadline. Ctrl+C terminates the synchronous CLI process rather than cancelling
-an individual in-process query. The command reads at most `row_limit + 1` rows
-so it can report truncation without retaining a result set.
+`commonplace graph query` accepts SPARQL 1.1 SELECT queries through Oxigraph's
+native query parser and a native read-only store. SPARQL Update and the ASK,
+CONSTRUCT, and DESCRIBE query forms are rejected as `invalid_input` in the first
+release. This is a product boundary, not an engine limitation. No mutation API is
+exposed and read-only enforcement is not based on string filtering.
 
-Graph-query output contains ordered `columns` and `rows`. JSON-native scalar,
-list, and object values serialize recursively. Nodes serialize as a tagged
-object containing sorted labels and properties. Relationships serialize as a
-tagged object containing their type, endpoint `id` values, and properties.
-Paths serialize as ordered node and relationship arrays. Unsupported Grafeo
-values fail explicitly rather than being stringified.
+Queries are local: HTTP support and remote service handlers are disabled.
+`SERVICE` cannot retrieve remote data. `SERVICE SILENT` retains SPARQL's error
+suppression semantics without enabling network access. Dataset clauses select
+only locally stored graphs; they do not fetch IRIs.
+
+An operation-scoped timer requests native cancellation when the configured
+evaluation budget expires. Cancellation is cooperative, may overshoot, and is
+not a hard wall-clock or memory limit. It covers execution and result iteration,
+not a promise of preemptible parsing or every engine operator. A cancelled query
+returns `limit_exceeded`, not partial success. Ctrl+C terminates the synchronous
+CLI process rather than keeping it alive with a cancelled query.
+
+The command consumes at most `row_limit + 1` solutions from the engine's lazy
+iterator, retains at most `row_limit` output rows, and reports `truncated` when
+the extra solution exists. This bounds final result retention, not internal
+sorting/join/aggregate memory or individual value size. Queries are not rewritten
+to append LIMIT. Without ORDER BY, row order is not guaranteed across runs.
+
+The graph-query success payload (inside the common CLI success envelope) has
+`kind`, `columns`, `rows`, and `truncated` fields. For example, an empty result
+projecting `?knowledge` is
+`{"kind":"select","columns":["knowledge"],"rows":[],"truncated":false}`.
+Columns are variable names without `?`, in native projection order. Each row is an array
+aligned with those columns. Unbound variables are JSON `null`; bound RDF terms
+use these exact shapes:
+
+| Term | JSON shape |
+| --- | --- |
+| IRI | `{"type":"uri","value":"urn:commonplace:knowledge:3"}` |
+| Blank node | `{"type":"bnode","value":"label"}` |
+| Literal | `{"type":"literal","value":"42","datatype":"http://www.w3.org/2001/XMLSchema#integer","language":null}` |
+
+Literal lexical values remain strings, including integers, booleans, timestamps,
+and query-computed datatypes. Language-tagged literals retain their language tag
+and datatype; untagged literals have `language:null`. Blank-node labels are
+result/store-scoped, not canonical Commonplace IDs. Unsupported native term
+variants fail explicitly, never by stringification or shape heuristics.
+SPARQL expression errors retain their native unbound semantics. In particular,
+stock Oxigraph's bare minimum-i64 expression may be unbound; the explicit
+`"-9223372036854775808"^^<http://www.w3.org/2001/XMLSchema#integer>` literal and
+canonical stored integer preserve the exact value without query rewriting.
+
+For example, an ordered query for an authored fact and its exact evidence is:
+
+```sparql
+PREFIX c: <urn:commonplace:property:>
+SELECT ?knowledge ?passage ?revision ?document ?start ?end ?quote
+WHERE {
+  ?knowledge c:kind "fact"; c:predicate <urn:commonplace:predicate:1>;
+             c:evidence ?passage .
+  ?passage c:revision ?revision; c:start_byte ?start;
+           c:end_byte ?end; c:text ?quote .
+  ?revision c:document ?document .
+}
+ORDER BY ?knowledge ?passage
+```
+
+A zero-evidence item still exists in the graph; callers use OPTIONAL evidence
+patterns when such items should be included. Joins may return multiple rows per
+knowledge item without changing its identity.
 
 ## 9. CLI contract
 
@@ -466,7 +507,7 @@ commonplace graph query
 commonplace graph rebuild
 ```
 
-`commonplace init` creates the SQLite database, Grafeo storage location, and local
+`commonplace init` creates the SQLite database, Oxigraph storage location, and local
 configuration for one knowledge base. It does not create model profiles,
 approval state, cache profiles, or a separate model-preparation workflow.
 Pinned models load on first use and may be obtained through the selected
@@ -487,8 +528,9 @@ per-request write limits bound individual stored values; cumulative revision
 and entity histories may grow with use.
 
 `commonplace schema show` returns the complete user vocabulary from SQLite.
-`commonplace graph schema` returns the stable physical graph shape, canonical property
-names, evidence fields, and example read-only Cypher patterns. Standard
+`commonplace graph schema` returns the stable RDF mapping, reserved namespaces
+and metadata graph, canonical ID mapping, property names, datatypes, evidence
+fields, and example read-only SPARQL SELECT patterns. Standard
 `--help`, these two schema commands, and generated input descriptions replace a
 general `commonplace capabilities` command.
 
@@ -548,7 +590,7 @@ Commonplace does not include:
 - multiple selectable model profiles;
 - background workers or job recovery;
 - incremental graph projection;
-- historical or withdrawn knowledge in Grafeo;
+- historical or withdrawn knowledge in Oxigraph;
 - retained graph sessions or query handles;
 - a general query-plan language, continuation tokens, or retained result sets;
 - fixed relationship, decision, count, or proof-inspection query APIs;

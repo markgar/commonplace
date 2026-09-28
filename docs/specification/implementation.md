@@ -4,7 +4,7 @@
 
 Implementation proceeds through vertical slices that each produce usable CLI
 behavior. The first release is complete when a person can ingest local sources,
-search exact evidence, author cited knowledge, query it through Cypher, withdraw
+search exact evidence, author cited knowledge, query it through SPARQL SELECT, withdraw
 knowledge, and reproduce the same results after reopening the application.
 
 ## 2. Technology gate
@@ -12,13 +12,13 @@ knowledge, and reproduce the same results after reopening the application.
 Before release packaging, a disposable Rust spike must prove that the selected
 components can ship together as a self-contained distribution:
 
-- Grafeo 0.5.43 with the `lpg` feature profile;
+- stock Oxigraph with default features disabled and only `rocksdb` enabled;
 - SQLite with FTS5;
 - one SQLite vector extension;
 - one local embedding model and runtime;
 - one local reranker and runtime;
-- native role-scoped read-only Cypher enforcement;
-- native query deadlines and process-level cancellation; and
+- native read-only storage and SELECT-only query enforcement;
+- scoped native cooperative cancellation and process-level termination; and
 - release execution without an installed interpreter, language runtime, source
   checkout, or build tool.
 
@@ -44,13 +44,21 @@ The selected vector extension must demonstrate:
 Failure of a required component reopens that component or the implementation
 language choice. It does not introduce parallel backends.
 
-Component feasibility is established but the integrated gate remains open. The
-[Rust packaging spike](../spikes/rust-packaging.md) proves SQLite, sqlite-vec,
-inference, reranking, and the superseded Ladybug engine together on macOS
-arm64. The [Grafeo evaluation spike](../spikes/grafeo-evaluation.md) proves the
-selected graph engine separately on every intended OS and architecture. The
-packaging slice must replace Ladybug with Grafeo and rerun the complete bundle
-before release.
+The local graph and integrated runtime gates passed with stock Oxigraph 0.5.11
+on macOS arm64. Evidence is committed in P2 commit
+`5d3e0554ed5076d530a9b9a0907c2eca14b5d181`, in
+`docs/spikes/oxigraph-evaluation.md` on the P2 branch.
+That commit also contains structured results and the reproduction harness.
+It proves the combined Oxigraph/RocksDB, SQLite/FTS5/sqlite-vec, and unchanged
+pinned embedding/reranking runtime in a relocated, network-denied local run.
+It is not independent clean-machine or other-platform execution evidence.
+
+This specification adopts that stock-engine route, without engine patches.
+Earlier Ladybug/Grafeo reports remain historical evidence, not proof for the
+selected Oxigraph runtime. No further feasibility spike is required before local
+implementation. Production integration and release packaging remain distinct:
+P5a replaces the production engine, and P10 closes clean-target evidence.
+The evaluated version is not a substitute for production Cargo pins.
 
 The first release supports:
 
@@ -64,17 +72,18 @@ macOS x64 is not a release target.
 
 ### 3.1 Starting point and planning boundary
 
-The planning baseline is commit `772f7424f6cd`. The application currently exposes
-only `init`. It includes the SQLite table definitions, FTS5 and sqlite-vec
+The planning baseline is commit `772f7424f6cd`. At that baseline the application
+exposes only `init`. It includes the SQLite table definitions, FTS5 and sqlite-vec
 initialization, an empty persistent Grafeo store, tagged IDs, a canonical file
 source-key helper, and initialization tests. Those are starting assets, not
 evidence that ingestion, knowledge publication, or release acceptance is done.
 In particular, graph version metadata, publication locks, operational writer
 locking, inference, and the remaining public workflows still need integration.
 
-This plan changes delivery order, not product scope or durable semantics.
+The initial plan changed delivery order; this revision also records the approved
+Oxigraph/SPARQL replacement and version-2 store adoption.
 [Product](product.md), [architecture](architecture.md), and
-[persistence](persistence.md) retain their ownership under the
+[persistence](persistence.md) retain their respective ownership under the
 [specification hierarchy](README.md). Sections 5-7 below remain the release
 acceptance contract. Spike reports supply implementation evidence, not substitute
 requirements.
@@ -87,11 +96,12 @@ authoring command is not an intermediate deliverable.
 
 ### 3.2 Dependency map and scheduling
 
-All packets below are planned, not completed. Update a packet with its PR or
-commit and acceptance evidence when it is delivered. A dependency means the
-prerequisite packet or named gate has been integrated, not merely that somebody
-has started it. P2 has separate graph and inference gates so an unrelated
-runtime question does not unnecessarily block both lanes.
+The linked packet issues below own current progress, session ownership, blockers,
+PRs, and integration evidence. Do not maintain a second status table in this file.
+A dependency means the prerequisite packet or named gate has been integrated,
+not merely started or committed. P2 has separate graph and inference gates so
+an unrelated runtime question does not unnecessarily block both lanes. Its
+recorded local proof is in section 2; production integration is tracked separately.
 
 Execution policy: run development checks and spikes locally. Automatic GitHub
 Actions CI is disabled to conserve Actions usage. Do not enable, dispatch, or
@@ -100,18 +110,18 @@ validation runs, not the supported release targets or required release evidence.
 
 | Packet | User-visible outcome or gate | Depends on | Primary ownership |
 | --- | --- | --- | --- |
-| P0 | Agree the first execution boundaries and unresolved decisions | Baseline inspection | Integrator |
-| P1 | Apply and inspect vocabulary in a safely opened store | P0 | Shared start, then knowledge lane |
-| P2 | Prove the selected inference and graph components work together | P0 | Bounded runtime work |
-| P3 | Ingest files and read exact, revisioned evidence | P1, P2 inference gate | Source lane |
-| P4 | Search current evidence through the complete hybrid pipeline | P3 | Source lane |
-| P5a | Query, inspect, and rebuild the graph safely | P1, P2 graph gate | Knowledge lane |
-| P5b | Record entities and cited types with coordinated graph publication | P3, P5a | Knowledge lane |
-| P6 | Record cited relationships and literal facts atomically | P5b | Knowledge lane |
-| P7 | Withdraw knowledge without leaving invalid active facts | P6 | Knowledge lane |
-| P8 | Remove sources while preserving authored knowledge | P5b | Integration handoff |
-| P9 | Ingest stdin, JSON Lines, and manifest inputs | P3 | Source lane |
-| P10 | Demonstrate the complete release on supported targets | P4, P7, P8, P9 | Integrator and packet owners |
+| [P0 (#11)](https://github.com/markgar/commonplace/issues/11) | Agree the first execution boundaries and unresolved decisions | Baseline inspection | Integrator |
+| [P1 (#12)](https://github.com/markgar/commonplace/issues/12) | Apply and inspect vocabulary in a safely opened store | P0 | Shared start, then knowledge lane |
+| [P2 (#13)](https://github.com/markgar/commonplace/issues/13) | Prove the selected inference and graph components work together | P0 | Bounded runtime work |
+| [P3 (#15)](https://github.com/markgar/commonplace/issues/15) | Ingest files and read exact, revisioned evidence | P1, P2 inference gate | Source lane |
+| [P4 (#19)](https://github.com/markgar/commonplace/issues/19) | Search current evidence through the complete hybrid pipeline | P3 | Source lane |
+| [P5a (#16)](https://github.com/markgar/commonplace/issues/16) | Query, inspect, and rebuild the graph safely | P1, P2 graph gate | Knowledge lane |
+| [P5b (#14)](https://github.com/markgar/commonplace/issues/14) | Record entities and cited types with coordinated graph publication | P3, P5a | Knowledge lane |
+| [P6 (#17)](https://github.com/markgar/commonplace/issues/17) | Record cited relationships and literal facts atomically | P5b | Knowledge lane |
+| [P7 (#20)](https://github.com/markgar/commonplace/issues/20) | Withdraw knowledge without leaving invalid active facts | P6 | Knowledge lane |
+| [P8 (#21)](https://github.com/markgar/commonplace/issues/21) | Remove sources while preserving authored knowledge | P5b | Integration handoff |
+| [P9 (#18)](https://github.com/markgar/commonplace/issues/18) | Ingest stdin, JSON Lines, and manifest inputs | P3 | Source lane |
+| [P10 (#22)](https://github.com/markgar/commonplace/issues/22) | Demonstrate the complete release on supported targets | P4, P7, P8, P9 | Integrator and packet owners |
 
 Recommended schedule:
 
@@ -158,9 +168,9 @@ contracts. This is a decision checkpoint, not an infrastructure coding project.
   section 4. Do not finalize every future Rust type or command schema now.
 
 **Exit:** owners, prerequisites, shared CLI conventions, P1 examples, and the
-P2 probe scope are agreed. P2 names graph storage/lock paths and compatibility
-implications before P5a changes the initialized layout; no layout change is
-presumed necessary.
+P2 probe scope are agreed. The Oxigraph adoption now fixes graph storage/lock
+paths and version-2 compatibility in persistence section 13. P5a implements that
+replacement rather than reopening the engine/layout decision.
 Obtain approval before implementing new public contracts, changing a durable
 format, or running platform packaging. Approval of this plan is not approval to
 introduce unlisted commands, providers, migrations, or broad platform CI.
@@ -201,36 +211,43 @@ termination. Keep initialization behavior covered.
 **Outcome:** establish that the chosen native components can support the next
 slices together before production ingestion depends on them.
 
-**Work:** reuse the existing spike harnesses, replacing the superseded Ladybug
-component in the combined probe with Grafeo. Start from the model revisions and
-runtime evidence in the packaging report, but pin production dependencies in
-Cargo rather than treating the report as a dependency manifest. Verify embedding
-dimensions, normalization, vector binding, reranking, offline cached execution,
-and lazy model loading in the same executable as Grafeo and SQLite.
+**Status: local PASS, committed; no repeat spike requested.** The evidence commit
+in section 2 completes the local graph and inference gates. Integrate that
+evidence with the adoption specifications before dependent implementation; do
+not mistake spike code for a production adapter.
 
-**Graph gate:** exercise the APIs needed by P5a: native role-scoped mutation rejection,
-version metadata persistence, close/reopen, deadline errors, result iteration
-and serialization, and candidate-file replacement after handles close. Deliver
-the demonstrated version-metadata carrier, current/candidate/lock path layout,
-and any compatibility implications. Do not assume that an extra file requires
-changing `config.json`, or choose a sidecar/reserved node without checking the
-specified projection and publication semantics.
+**Graph gate evidence:** native read-only mutation rejection, query/update
+separation, disabled HTTP, genuinely lazy SELECT, typed RDF results, distinct
+knowledge identities and exact citations, persisted named-graph version metadata,
+close/reopen, scoped cancellation, multi-process locks, and native-directory
+publication. Real SQLite commit failure restores the previous directory;
+enumerated process-crash windows fail closed and explicit rebuild restores
+parity. The production mapping includes all source fields required by product
+and persistence, not just the spike's compact fixture.
 
-Demonstrate the actual mechanism for bounded graph results; an iterator over
-already materialized rows does not prove bounded engine retrieval. Post-hoc
-truncation must not silently weaken the product's read bound, and rewriting
-Cypher with a `LIMIT` requires evidence that query semantics are preserved.
-If the engine cannot satisfy the specified behavior, report the mismatch for
-an explicit component or specification decision rather than designing a fallback.
+The lazy iterator bounds consumed final solutions and retained output, not
+internal joins/sorts/aggregates or individual value size. Native cancellation is
+cooperative: the recorded 20 ms requests completed in approximately 283-299 ms.
+These are observations, not a promised upper bound. Bare minimum-i64 expressions
+may be unbound; canonical typed storage and explicit typed literals preserve
+the exact value. Do not patch the engine or rewrite queries to hide this.
 
-**Inference gate:** verify the combined inference/native stack locally, including
-immutable model acquisition, embedding and reranking execution, and offline cached
-operation. The existing reports prove Grafeo across targets but the combined
-inference stack only on macOS arm64. Reuse that evidence rather than repeating
-standalone Grafeo evaluation. Record a target-by-target evidence matrix; use
-additional local machines only when available and authorized. Do not dispatch
-Actions to fill gaps. The current manual workflow covers Linux x64/arm64 and
-Windows arm64; it is not already a five-target matrix.
+**Inference gate evidence:** the combined Oxigraph/SQLite/inference executable
+passed embedding dimensions/normalization, vector binding and transactions,
+reranking, and relocated offline cached execution using the pinned models.
+Inference providers/revisions are unchanged. Retain the report's exact artifact
+and cache identities; production Cargo files own integration pins.
+
+| Target | Selected combined runtime evidence |
+| --- | --- |
+| macOS arm64 | Local PASS; independent clean-machine packaging unverified |
+| Windows x64 | UNVERIFIED |
+| Windows arm64 | UNVERIFIED |
+| Linux x64 | UNVERIFIED |
+| Linux arm64 | UNVERIFIED |
+
+Use additional local machines only when available and authorized. Do not dispatch
+Actions to fill gaps or count prior engine results as Oxigraph evidence.
 
 A passing local inference gate permits P3 on that host. Missing target execution
 remains explicitly unverified and blocks release, not local feature development.
@@ -322,29 +339,42 @@ pipeline tests; attach the real-model result to this packet's acceptance.
 
 **Outcome:** inspect the physical graph schema, query an initialized graph, and
 explicitly rebuild it from committed SQLite state with version parity and safe
-file publication. This packet runs alongside ingestion and exposes no authoring
+directory publication. This packet runs alongside ingestion and exposes no authoring
 command.
 
-**Work:** implement `graph query`, `graph schema`, and `graph rebuild`, consuming
-P2's proven metadata, path-layout, and bounded-result decisions. Add graph version
-initialization/validation, native read-only roles, deadlines, deterministic value
-serialization, and process termination. Rebuild owns deterministic snapshot reads,
+**Work:** replace production Grafeo with stock Oxigraph, remove the old graph
+dependency/adapter, and pin the evaluated baseline with only RocksDB enabled.
+Update `init`, store format validation, SQLite's format marker/constraint, and
+configuration together for `commonplace-store/2` and `commonplace-config/2`.
+Reject version-1 stores without mutation; no migration or compatibility backend.
+Preserve the `init` response field names while returning the new format value.
+
+Implement `graph query`, `graph schema`, and `graph rebuild` against the adopted
+product/persistence contracts. Add named-graph metadata initialization/validation,
+SELECT-only parsing, native read-only handles, scoped native cancellation,
+RDF-term serialization, and process termination. Rebuild owns deterministic snapshot reads,
 candidate verification, publication locking, and safe activation from committed
 state. Add only capabilities consumed by these commands; coordinated SQLite
 commit/graph restoration first belongs to P5b, where knowledge writes need it.
 
 **Primary surfaces:** `app/graph`, graph snapshot reads, `graph/`, initialization,
-and CLI wiring.
+store/configuration validation, root Cargo manifests, and CLI wiring. Coordinate
+shared-file changes with P3; do not replace its inference dependency work.
 
 **Acceptance:** initialize, inspect, query, rebuild, and reopen an empty store
-through the binary. Applying unused vocabulary leaves the graph empty. Use
+through the binary. Applying unused vocabulary leaves the default graph empty;
+the metadata graph remains present. Use
 real SQLite fixtures with active memberships to exercise nonempty rebuild and
 canonical-ID parity without inventing a public seed command. A version mismatch
-fails closed; rebuild restores parity without changing `knowledge_version`.
+fails closed; missing/corrupt current and invalid metadata do too. Rebuild
+restores parity without changing `knowledge_version`.
 Build or activation failure preserves the previous graph. A reader in another
 process prevents publication from replacing files it holds. Verify native
-mutation rejection, deadlines, process cancellation, specified value encodings,
-unsupported-value errors, and the proven row-bound/truncation behavior.
+mutation rejection, unsupported query-form errors, cooperative budget cancellation,
+prompt timer teardown, process termination, exact RDF-term encodings, and the
+proven row-bound/truncation behavior. Version-1 opening, initialization, and
+rebuild fail without modifying the old store. These checks accompany production
+implementation; they are not another feasibility gate.
 
 Do not prebuild future authoring forms or an unused general transaction
 coordinator. P5b extends the snapshot with its real evidence path, and P6 extends
@@ -353,7 +383,7 @@ it with facts; each addition is complete before that write form becomes availabl
 #### P5b: entities, cited types, and coordinated publication
 
 **Outcome:** record entities with multiple cited types, read their canonical
-state, and query the same active knowledge through read-only Cypher after reopen.
+state, and query the same active knowledge through read-only SPARQL SELECT after reopen.
 
 **Work:** implement entity resolution, alias/identifier corrections, type
 membership authoring and evidence validation, plus entity/knowledge `get`.
@@ -378,7 +408,7 @@ request-local references reject the entire request. Bare entities stay out of
 the graph until active; only entity types used by active knowledge are projected.
 Metadata-only corrections do not rebuild it.
 
-Use real Grafeo and SQLite to verify build/activation failure rollback and
+Use real Oxigraph and SQLite to verify build/activation failure rollback and
 restoration after reported SQLite commit failure. Simulate the activation/commit
 crash window and prove queries fail closed until explicit rebuild. Reuse P5a's
 reader/publication tests against authoring and add end-to-end citation traversal.
@@ -426,7 +456,7 @@ publication path. Do not introduce a second transaction coordinator.
 
 **Primary surfaces:** `app/withdraw`, knowledge validation/storage, and CLI.
 
-**Acceptance:** withdraw a fact and observe its absence from Cypher and its
+**Acceptance:** withdraw a fact and observe its absence from SPARQL results and its
 retained subtype, evidence, and withdrawal state through `get`. Removing the
 last permitted endpoint type fails unless dependent facts are also withdrawn
 in that request; another permitted active type allows withdrawal. An invalid or
@@ -449,7 +479,7 @@ Return detached-evidence counts and affected knowledge IDs.
 **Acceptance:** through the CLI, remove a multiply revised, cited source; verify
 no source, revision, passage, FTS, vector, or evidence rows remain for it.
 Affected knowledge remains active, possibly with empty support, in SQLite and
-Grafeo. Unrelated evidence survives. Failure rolls back deletion and publication;
+Oxigraph. Unrelated evidence survives. Failure rolls back deletion and publication;
 reopen and reingestion preserve the specified identity semantics. Directory
 absence remains unrelated to removal.
 
@@ -515,7 +545,7 @@ not completion of an otherwise accepted feature packet.
   P6-P8 reuse that path. Changes to shared types require
   dependent callers and tests to be updated in the same integration.
 - Every feature packet carries a real CLI acceptance test using temporary stores and
-  the relevant section 6 failure/invariant checks. Use real SQLite and Grafeo;
+  the relevant section 6 failure/invariant checks. Use real SQLite and Oxigraph;
   substitute only expensive inference in routine pipeline tests and retain
   separate real-model checks. Grow the section 5 scenario incrementally instead
   of delegating all testing to a final lane.
@@ -528,6 +558,29 @@ not completion of an otherwise accepted feature packet.
   architectural layer. Stop expanding it when its acceptance passes.
 - Implementation, PR creation, merge, and release are separate actions. This
   document does not authorize automatic merging or publication.
+
+### 3.15 Progress tracking
+
+The packet issue's `Progress` table is the live record: state, owner/session,
+dependencies, blocker, PR, evidence, next action, and update date. Use
+`Not started`, `Building`, `Ready for review`, `Blocked`, or `Integrated`.
+`Blocked` requires a concrete cause and unblock action; a queued packet waiting
+its ordinary dependencies can remain `Not started`.
+
+Update the issue when work starts, becomes blocked, is ready for review, or
+integrates. Preserve decisions and handoffs in short issue comments; do not log
+every command. A commit, passing isolated checks, idle session, or closed issue
+alone does not prove integration. Mark `Integrated` and close only after the
+accepted work is merged into the integration base and combined acceptance is
+confirmed; record the PR/merge commit and evidence. Local P2 proof and P10
+release readiness remain separate.
+
+The repo-local
+[`commonplace-progress` skill](../../.github/skills/commonplace-progress/SKILL.md)
+defines the start/update/handoff procedure for implementers and the coordinator.
+Progress summaries report newly integrated work, active work, blockers or needed
+approvals, and next eligible packets from freshly read issues/session state.
+Do not estimate percentage complete or add a parallel dashboard/status document.
 
 ## 4. Bounded implementation decisions
 
@@ -572,15 +625,18 @@ Decision ownership and deadlines:
 | Candidate limits, fusion constants, rerank limit, ordering | P4, before search completion | Deterministic tests and the pinned-model relevance fixture |
 | Source, batch, passage, embedding, and JSON-input limits | First consuming packet: P1/P3, extended in P6/P9 | Boundary tests and explicit error examples |
 | Writer timeout and graph publication behavior | P1, P5a rebuild, P5b knowledge commits | Real multi-process contention and failure tests |
-| Graph metadata carrier, current/candidate/lock paths, and compatibility | P2 graph gate, before P5a implementation | Persist/reopen/publication proof and explicit format assessment |
-| Graph row-bound mechanism, duration limits, and value encoding | P2 graph gate, P5a implementation | Semantics-preserving native API proof, exact output tests, timeout and truncation tests |
+| RDF mapping, metadata, directory/lock paths, and version-2 compatibility | Adopted in product/persistence; implement in P5a/P5b/P6 | Completed P2 local proof; production projection, publication, and format-rejection checks |
+| SELECT/RDF result contract, lazy row bound, and cooperative cancellation mechanism | Adopted in product/architecture; implement in P5a | Completed P2 local proof; exact production output, cancellation, and truncation checks |
+| Numerical graph row and duration budgets | P5a, before query completion | Boundary checks using the adopted mechanisms; no hard-timeout claim |
 | Shared output flags and validator-backed descriptions | P0 agreement, P1 first implementation | Approved shared conventions, schema dialect, and unchanged init JSON shape |
 | Binary test fixtures and real-model test execution | P1 harness; P2 convention, P3 production model tests | Shared process fixtures and an explicit pinned-cache invocation with no silent skips |
 | Command-specific inputs, outputs, and errors | Each command's owning packet, reusing P1 conventions | Approved examples, executable validators, and CLI tests |
 
-The existing `commonplace-store/1` marker is not proof that every representation
-choice above has been finalized. Before persisting a newly selected
-representation, explicitly determine whether it is compatible with initialized
+The adopted `commonplace-store/2` marker is not proof that every representation
+choice above has been finalized. P5a implements the approved replacement of
+version 1 described in persistence; it does not silently repurpose that marker.
+Before persisting any other newly selected representation, explicitly determine
+whether it is compatible with initialized
 stores. Obtain approval for any format change, update the owning specification,
 and reject incompatible stores without mutation. Do not silently repurpose a
 format identifier or add migration machinery to make development fixtures pass.
@@ -599,7 +655,7 @@ A release candidate must pass this sequence from an empty store:
 8. Record an entity with multiple active types.
 9. Record an evidence-backed entity relationship.
 10. Record a cited literal decision.
-11. Query the graph with read-only Cypher and return canonical evidence
+11. Query the graph with read-only SPARQL SELECT and return canonical evidence
     references.
 12. Withdraw one fact and confirm that it disappears from active graph queries
     while remaining readable from history.
@@ -649,15 +705,23 @@ A release candidate must pass this sequence from an empty store:
 ### Graph
 
 - The projection contains all active knowledge and no withdrawn knowledge.
-- Only schema terms used by active knowledge are projected.
+- Only schema terms used by active knowledge are projected; reserved version
+  metadata is separate from user vocabulary and remains present for an empty graph.
 - Ordinary document ingestion does not rebuild the graph.
-- Evidence can be traversed directly from knowledge to passage and source.
+- Evidence traverses knowledge to passage, exact cited revision, and document.
+- Equal facts retain distinct knowledge IRIs and their own evidence links.
 - Graph and SQLite versions must match before query execution.
-- A version mismatch is recoverable with `commonplace graph rebuild`.
+- Invalid/missing version metadata and missing/corrupt current graphs fail closed.
+- Compatible derived-state failures are recoverable with `commonplace graph rebuild`.
 - Graph publication cannot replace files held by an active graph reader.
-- Cypher mutations are rejected natively.
-- Row limits are enforced.
-- An over-budget query returns Grafeo's native timeout error.
+- Native read-only handles reject mutations; the public parser accepts SELECT only.
+- HTTP/remote SERVICE execution remains disabled.
+- Lazy iteration consumes at most `row_limit + 1` solutions, with no injected LIMIT.
+- RDF-term JSON preserves column order, unbound nulls, and exact typed literals.
+- Budget expiry requests native cancellation through execution and iteration;
+  observed cancellation returns `limit_exceeded` rather than partial success.
+- Timer teardown is prompt on completion, truncation, and errors; no hard
+  wall-clock or internal working-memory bound is claimed.
 - Terminating the synchronous CLI process stops an executing graph query.
 - A graph activation failure leaves SQLite unchanged.
 - A reported SQLite commit failure restores the previous graph.
@@ -668,7 +732,7 @@ A release candidate must pass this sequence from an empty store:
 - The process-level writer lock works on every supported platform.
 - Incompatible store formats are rejected without mutation.
 - Rows written by one operation share one application-supplied timestamp.
-- The packaged executable loads SQLite extensions and Grafeo on a clean target.
+- The packaged executable loads SQLite extensions and Oxigraph on a clean target.
 - Commands that do not use inference do not load model weights.
 - Source text never leaves the local inference path.
 

@@ -48,7 +48,7 @@ specifically needed and authorized.
 2. Inspect the relevant specification and existing code.
 3. Implement one complete vertical slice through the real user path.
 4. Add focused behavior, failure, and invariant tests. Use real SQLite and
-   Grafeo when their behavior is under test; use deterministic substitutes only
+   Oxigraph when their behavior is under test; use deterministic substitutes only
    for expensive inference providers.
 5. Run the applicable checks documented in `README.md`.
 6. Review the complete diff for unnecessary scope, duplicated contracts, and
@@ -56,3 +56,12 @@ specifically needed and authorized.
 7. Stop when the acceptance test passes.
 
 Do not merge unless explicitly requested.
+
+## Packet progress and handoffs
+
+Before starting/resuming a packet or reporting build progress, follow the
+repo-local [`commonplace-progress` skill](skills/commonplace-progress/SKILL.md).
+If the client has not discovered the skill, read that file directly.
+The implementation plan links the packet issues; issues own live status,
+ownership, blockers, PRs, and evidence. Update them at meaningful transitions.
+Do not equate a committed change, idle session, or closed issue with integration.

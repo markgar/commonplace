@@ -88,6 +88,10 @@ cargo test --all-targets --all-features
 Run development checks locally. GitHub Actions CI is disabled to conserve
 Actions usage; enabling or dispatching workflows requires explicit approval.
 
+For packet work and build status, use the repo-local
+[`commonplace-progress` skill](.github/skills/commonplace-progress/SKILL.md).
+The execution plan links each packet's GitHub progress issue.
+
 ## Design documents
 
 The standalone design specification is organized under
@@ -97,3 +101,7 @@ The standalone design specification is organized under
 - [Software architecture](docs/specification/architecture.md)
 - [Persistence design](docs/specification/persistence.md)
 - [Implementation and acceptance](docs/specification/implementation.md)
+
+The specifications now select stock Oxigraph and SPARQL SELECT. Production
+replacement, including the version-2 store layout, is assigned to P5a; the
+initialization behavior described above still uses Grafeo until that work lands.

@@ -6,7 +6,7 @@ SQLite stores all authoritative Commonplace data. This document defines the
 durable model, transaction ownership, deletion behavior, and invariants required
 by the product.
 
-Grafeo files are derived artifacts. They contain no unique authored fact and
+Oxigraph directories are derived artifacts. They contain no unique authored fact and
 never override SQLite.
 
 ## 2. Storage principles
@@ -19,7 +19,7 @@ never override SQLite.
 6. User vocabulary is represented as rows in generic tables.
 7. Type memberships and facts share one knowledge-item lifecycle.
 8. Alias and identifier corrections are explicit and transactional.
-9. Withdrawn knowledge remains in SQLite and is excluded from Grafeo.
+9. Withdrawn knowledge remains in SQLite and is excluded from Oxigraph.
 10. Incompatible representation changes require a fresh store.
 
 ## 3. Table inventory
@@ -40,7 +40,7 @@ The database contains 15 ordinary tables and two virtual search tables:
 ```sql
 CREATE TABLE store_state (
     singleton         INTEGER PRIMARY KEY CHECK (singleton = 1),
-    format            TEXT NOT NULL CHECK (format = 'commonplace-store/1'),
+    format            TEXT NOT NULL CHECK (format = 'commonplace-store/2'),
     schema_version    INTEGER NOT NULL DEFAULT 0 CHECK (schema_version >= 0),
     knowledge_version INTEGER NOT NULL DEFAULT 0 CHECK (knowledge_version >= 0),
     created_at        TEXT NOT NULL
@@ -49,7 +49,13 @@ CREATE TABLE store_state (
 
 Exactly one row exists. `format` identifies the complete durable representation,
 including ordinary DDL, passage generation, lexical configuration, embedding
-identity and dimensions, and vector encoding.
+identity and dimensions, vector encoding, and the derived graph representation.
+
+`commonplace-store/2` adopts the RDF mapping and Oxigraph directory layout in
+section 13. The former `commonplace-store/1` Grafeo layout is incompatible and
+requires a fresh store. Implementing this replacement changes the SQLite format
+constraint/marker and initialized configuration together; it does not migrate,
+relabel, delete, or automatically rebuild a version-1 store.
 
 `schema_version` changes when vocabulary changes. `knowledge_version` changes
 when active graph content or evidence changes.
@@ -421,14 +427,149 @@ Snapshot construction uses separate bounded queries for:
 2. active facts ordered by `knowledge_item_id`;
 3. referenced entities ordered by `entity_id`;
 4. referenced entity types ordered by `entity_type_id`;
-5. supporting passages ordered by `passage_id`;
-6. source documents ordered by `document_id`; and
-7. evidence pairs ordered by `knowledge_item_id` and `passage_id`.
+5. referenced predicates ordered by `predicate_id`;
+6. supporting passages ordered by `passage_id`;
+7. their source revisions ordered by `revision_id`;
+8. source documents ordered by `document_id`; and
+9. evidence pairs ordered by `knowledge_item_id` and `passage_id`.
 
 Separate reads prevent one-to-many evidence joins from duplicating semantic
-edges. Snapshot construction validates exactly one subtype row per active
+items. Snapshot construction validates exactly one subtype row per active
 knowledge item before returning. The graph stores the same
 `knowledge_version` in its metadata.
+
+### 13.1 Canonical RDF projection
+
+The projection uses ordinary RDF 1.1. Knowledge and evidence triples are in the
+default graph. The application property prefix `c:` expands to
+`urn:commonplace:property:`; `xsd:` expands to
+`http://www.w3.org/2001/XMLSchema#`. All application IRIs are reserved, not
+user-selected namespaces.
+
+Canonical resources use the following reversible mapping, with `N` the decimal
+SQLite primary key without leading zeros:
+
+| SQLite record | Resource IRI | Canonical tagged ID |
+| --- | --- | --- |
+| Document | `urn:commonplace:doc:N` | `doc:N` |
+| Document revision | `urn:commonplace:revision:N` | `revision:N` |
+| Passage | `urn:commonplace:passage:N` | `passage:N` |
+| Entity | `urn:commonplace:entity:N` | `entity:N` |
+| Knowledge item | `urn:commonplace:knowledge:N` | `knowledge:N` |
+| Entity type | `urn:commonplace:type:N` | `entity-type:N` |
+| Predicate | `urn:commonplace:predicate:N` | `predicate:N` |
+
+Each resource also has `c:id` with its canonical tagged ID as an `xsd:string`;
+the IRI prefix does not create a second ID allocation mechanism. Document,
+revision, passage, entity, and knowledge IDs resolve through `get`. Vocabulary
+IDs resolve through `schema show`. No canonical resource uses a blank node.
+
+The table below defines the other properties. Property names expand through
+`c:`. A link targets the corresponding resource above. Unless stated otherwise,
+properties are single-valued and required.
+
+| Resource | Properties and source |
+| --- | --- |
+| Entity | `name`: canonical entity name |
+| Entity type | `name`: vocabulary name |
+| Predicate | `name`: vocabulary name; `object_kind`: vocabulary object kind |
+| Knowledge item, both kinds | `kind`: `type_membership` or `fact`; `schema_version`: version recorded on the item; `subject`: entity link; `evidence`: zero or more supporting passage links |
+| Type membership | `entity_type`: type link |
+| Fact | `predicate`: predicate link; `object`: entity link or typed literal |
+| Literal fact only | `literal_kind`: predicate object kind; `literal_json`: canonical SQLite literal JSON as a string |
+| Passage | `revision`: revision link; `ordinal`, `start_byte`, `end_byte`, `text`: exact passage fields |
+| Revision | `document`: document link; `revision_number`, `revision_digest`, `source_type`, `metadata_json`: exact revision fields; optional `title` and `occurred_at` |
+| Document | `source_key`: canonical source key |
+
+Text, names, IDs, kinds, digests, and canonical JSON fields use `xsd:string`.
+Versions, ordinals, revision numbers, and byte offsets use `xsd:integer`.
+Optional SQL NULL fields emit no triple, not an empty string. Source metadata
+belongs to the cited revision, never implicitly to the latest revision.
+The graph carries passage text, not a second copy of full revision text; `get`
+remains authoritative for that full text.
+
+Fact object conversion is exact: JSON string to `xsd:string`, signed i64 to
+`xsd:integer`, boolean to `xsd:boolean`, and normalized UTC timestamp to
+`xsd:dateTime`. Projected `occurred_at` also uses `xsd:dateTime`. Integer lexical
+forms are decimal, boolean forms are `true`/`false`, and timestamps reuse the
+canonical normalization in section 14. No conversion through floating point is
+permitted. `literal_json` preserves the canonical authored JSON independently
+of the engine's term representation. Arbitrary query-computed literals use the
+product's RDF-term result contract, not the canonical SQLite JSON encoder.
+
+A membership or fact is represented by its distinct knowledge subject and the
+properties above, not by a bare `(entity, predicate, object)` triple or RDF 1.2
+triple term. Do not add parallel shortcut relationships or synthetic value nodes.
+Duplicate facts remain distinct resources; multiple evidence links do not
+duplicate the item. Zero-evidence active items remain projected.
+
+Only active items, their referenced entities/types/predicates, and their cited
+passages/revisions/documents are emitted. An item keeps its recorded
+`schema_version`; it is not rewritten to the latest vocabulary version.
+Vocabulary descriptions, endpoint constraints, aliases, and identifiers remain
+authoritative SQLite data outside this projection.
+
+### 13.2 Native version metadata
+
+The only application named graph is `urn:commonplace:metadata`. It contains:
+
+```turtle
+<urn:commonplace:store> <urn:commonplace:property:knowledge_version>
+    "0"^^<http://www.w3.org/2001/XMLSchema#integer> .
+```
+
+Replace `0` with the SQLite snapshot's `knowledge_version`. Verification requires
+exactly one value at this subject/predicate, typed as `xsd:integer`, within the
+nonnegative signed-i64 range, and equal to SQLite. Missing, multiple, malformed,
+wrong-datatype, negative, and unequal values are errors. An empty knowledge
+projection still contains this metadata triple. Metadata is query-visible but
+never mixed into the default graph or stored in an independent sidecar.
+
+### 13.3 Layout and compatibility
+
+The initialized configuration is:
+
+```json
+{
+  "format": "commonplace-config/2",
+  "database": "commonplace.sqlite3",
+  "graph": "graph/current"
+}
+```
+
+Graph paths relative to the store are fixed:
+
+| Path | Lifetime |
+| --- | --- |
+| `graph/current/` | Complete current native Oxigraph/RocksDB database |
+| `graph/candidate/` | Temporary complete replacement built from one SQLite snapshot |
+| `graph/previous/` | Temporary pre-activation database retained through SQLite commit |
+| `graph/publication.lock` | Stable application lock outside all renamed directories |
+
+`init` creates an empty default graph and version-zero metadata with matching
+SQLite/configuration formats. Its JSON response field names remain unchanged;
+its format value becomes `commonplace-store/2`. Version-1 configuration, the old
+`graph/current.grafeo` layout, and unknown markers are rejected before mutation,
+including by `init` and `graph rebuild`. No compatibility backend or migration
+is provided. Further incompatible representation decisions still require a
+new explicit format decision.
+
+Normal reads never create a missing current database or select `previous` as a
+fallback. Missing/corrupt current state or invalid metadata yields
+`graph_unavailable` with explicit rebuild guidance for an otherwise compatible
+store. SQLite-only operations need not open the graph.
+
+Temporary paths are not retained generations. A normal graph publisher encountering
+leftover candidate/previous state refuses to overwrite it and directs the caller
+to explicit rebuild. After validating the store format and taking the writer
+and exclusive publication locks, explicit rebuild may remove these two known
+derived scratch paths and reconstruct from committed SQLite. It never chooses
+a generation by directory name or metadata, scans for arbitrary orphans, or
+deletes authoritative state. It preserves any pre-operation current directory
+until a replacement is verified, then uses the activation/restore sequence in
+[architecture section 7.2](architecture.md#72-knowledge-changes).
+Rebuild also works when no current directory exists. Cleanup and restoration
+failures are reported explicitly; they are not successful repairs.
 
 ## 14. Time and serialization
 
