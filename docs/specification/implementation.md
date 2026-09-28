@@ -45,7 +45,10 @@ Failure of a required component reopens that component or the implementation
 language choice. It does not introduce parallel backends.
 
 The completed macOS arm64 technology-gate evidence and pinned selections are
-recorded in [the Rust packaging spike](../spikes/rust-packaging.md).
+recorded in [the Rust packaging spike](../spikes/rust-packaging.md). The
+cross-platform graph-engine evaluation, including an independent Windows x64
+package test, is recorded in
+[the Grafeo evaluation spike](../spikes/grafeo-evaluation.md).
 
 ## 3. Implementation sequence
 

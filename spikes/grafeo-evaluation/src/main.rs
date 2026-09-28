@@ -92,10 +92,20 @@ fn main() -> Result<()> {
         .map(|error| error.to_string());
     let database_mutation_rejected = database_mutation.is_some();
 
+    reopened.close()?;
+
+    let timeout_path = root.join("timeout.grafeo");
+    remove_graph(&timeout_path)?;
+    let timeout_db = GrafeoDB::with_config(
+        Config::persistent(&timeout_path)
+            .with_threads(2)
+            .with_query_timeout(Duration::from_millis(1)),
+    )?;
+    let timeout_session = timeout_db.session();
     let timeout_started = Instant::now();
-    let timeout_result = read_only.execute_cypher(
-        "UNWIND range(1, 100000) AS x
-             UNWIND range(1, 100000) AS y
+    let timeout_result = timeout_session.execute_cypher(
+        "UNWIND range(1, 1000000) AS x
+             UNWIND range(1, 1000000) AS y
              RETURN sum((x % 1000) * (y % 1000))",
     );
     let timeout_elapsed = timeout_started.elapsed();
@@ -104,8 +114,7 @@ fn main() -> Result<()> {
         .as_deref()
         .is_some_and(|message| message.to_ascii_lowercase().contains("timeout"))
         && timeout_elapsed < Duration::from_secs(2);
-
-    reopened.close()?;
+    timeout_db.close()?;
 
     let passed = role_mutation_rejected && database_mutation_rejected && timeout_passed;
     println!(

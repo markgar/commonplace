@@ -1,0 +1,98 @@
+name: Grafeo platform spike
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unix:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x64
+            runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            artifact: grafeo-linux-x64
+          - name: Linux ARM64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            artifact: grafeo-linux-arm64
+          - name: macOS x64
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+            artifact: grafeo-macos-x64
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.1
+          targets: ${{ matrix.target }}
+
+      - name: Build release executable
+        run: cargo build --manifest-path spikes/grafeo-evaluation/Cargo.toml --release --locked --target "${{ matrix.target }}"
+
+      - name: Stage and verify portable artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          dist="spikes/grafeo-evaluation/target/${{ matrix.artifact }}"
+          mkdir -p "$dist"
+          cp "spikes/grafeo-evaluation/target/${{ matrix.target }}/release/grafeo-evaluation" "$dist/"
+          cp spikes/grafeo-evaluation/verify-unix.sh "$dist/"
+          chmod +x "$dist/grafeo-evaluation" "$dist/verify-unix.sh"
+          "$dist/verify-unix.sh" | tee "$dist/platform-verification.txt"
+
+      - name: Upload portable executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: spikes/grafeo-evaluation/target/${{ matrix.artifact }}/
+          if-no-files-found: error
+          retention-days: 14
+
+  windows-arm64:
+    name: Windows ARM64
+    runs-on: windows-11-vs2026-arm
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.1
+          targets: aarch64-pc-windows-msvc
+
+      - name: Build release executable
+        run: cargo build --manifest-path spikes/grafeo-evaluation/Cargo.toml --release --locked --target aarch64-pc-windows-msvc
+
+      - name: Stage and verify portable artifact
+        shell: pwsh
+        run: |
+          $dist = ".\spikes\grafeo-evaluation\target\grafeo-windows-arm64"
+          New-Item -ItemType Directory -Force -Path $dist | Out-Null
+          Copy-Item .\spikes\grafeo-evaluation\target\aarch64-pc-windows-msvc\release\grafeo-evaluation.exe $dist
+          Copy-Item .\spikes\grafeo-evaluation\verify-windows.ps1 $dist
+          & "$dist\verify-windows.ps1" |
+            Tee-Object -FilePath "$dist\platform-verification.txt"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Grafeo verification failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Upload portable executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: grafeo-windows-arm64
+          path: spikes/grafeo-evaluation/target/grafeo-windows-arm64/
+          if-no-files-found: error
+          retention-days: 14
