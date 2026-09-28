@@ -28,6 +28,7 @@ pub enum CommandResult {
     Description(Description),
     Ingest(crate::app::ingest::IngestResult),
     Get(crate::app::get::Record),
+    Search(crate::domain::search::SearchResult),
 }
 
 impl CommandResponse {

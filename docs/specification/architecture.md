@@ -209,6 +209,13 @@ and acquisition never receives source text or metadata. Explicit real-model
 tests require the prepared offline override; ordinary tests never download
 weights.
 
+P4 reuses this exact acquisition/hash-verification path for the pinned local
+reranker, without changing ingestion's embedding-only acquisition. Search
+requires both models, including empty/zero-limit requests; non-search commands
+do not load the reranker. The reranker retains one loaded session or load failure
+and processes at most 64 candidates in batches of eight. No inference input
+enters artifact acquisition.
+
 ### 5.3 Graph engine
 
 `GraphRuntime` and its private Oxigraph projection/query modules form one direct

@@ -13,6 +13,246 @@ use common::Store;
 
 #[test]
 #[ignore = "requires prepared pinned COMMONPLACE_MODEL_CACHE; explicitly run offline, never downloads or skips"]
+fn real_model_search_offline() {
+    let cache = PathBuf::from(
+        std::env::var_os("COMMONPLACE_MODEL_CACHE")
+            .expect("set COMMONPLACE_MODEL_CACHE to the prepared P2 revision/file cache"),
+    );
+    let store = Store::new();
+    let execute = |args: &[&str]| -> Value {
+        let output = store
+            .command()
+            .env("COMMONPLACE_MODEL_CACHE", &cache)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stderr.is_empty());
+        serde_json::from_slice(&output.stdout).unwrap()
+    };
+    assert_eq!(
+        execute(&["search", "Lantern"])["result"],
+        json!({"items":[],"truncated":false})
+    );
+    let corpus = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/meeting-notes");
+    let notes = corpus.join("Obsidian Notes");
+    let recaps = corpus.join("AI Summaries");
+    assert_eq!(
+        execute(&[
+            "ingest",
+            notes.to_str().unwrap(),
+            "--source-type",
+            "note",
+            "--occurred-at",
+            "2026-09-28T00:00:00.000000001Z"
+        ])["result"]["summary"]["added"],
+        25
+    );
+    assert_eq!(
+        execute(&["ingest", recaps.to_str().unwrap(), "--source-type", "recap"])["result"]["summary"]
+            ["added"],
+        11
+    );
+    assert_eq!(
+        execute(&[
+            "ingest",
+            notes.to_str().unwrap(),
+            "--source-type",
+            "note",
+            "--occurred-at",
+            "2026-09-28T00:00:00.000000001Z"
+        ])["result"]["summary"]["unchanged"],
+        25
+    );
+    let session = SqliteDatabase::read(&store.root).unwrap();
+    assert_eq!(
+        session
+            .connection()
+            .query_row("SELECT count(*) FROM documents", [], |row| row
+                .get::<_, usize>(0))
+            .unwrap(),
+        36
+    );
+    assert_eq!(session.connection().query_row(
+        "SELECT count(*) FROM document_revisions WHERE title IN ('README.md','OVERVIEW.md')", [],
+        |row| row.get::<_, usize>(0)).unwrap(), 0);
+    drop(session);
+    let cases: Value =
+        serde_json::from_str(include_str!("../fixtures/search-relevance.json")).unwrap();
+    for (index, case) in cases.as_array().unwrap().iter().enumerate() {
+        let query = case["query"].as_str().unwrap();
+        let limit = case["top"].as_u64().unwrap().to_string();
+        let result = execute(&["search", query, "--limit", &limit]);
+        assert_eq!(result["operation"], "search");
+        assert_eq!(result["contract_version"], "1");
+        assert_eq!(result["status"], "complete");
+        assert_eq!(result["result"]["truncated"], true);
+        let items = result["result"]["items"].as_array().unwrap();
+        assert_eq!(items.len(), 5);
+        assert!(
+            items
+                .iter()
+                .any(|item| case["evidence"].as_array().unwrap().iter().any(
+                    |expected| item["title"] == expected["title"]
+                        && item["text"]
+                            .as_str()
+                            .unwrap()
+                            .contains(expected["contains"].as_str().unwrap())
+                )),
+            "required top-5 source and quote missing: {case}\n{result}"
+        );
+        let mut ids = std::collections::BTreeSet::new();
+        for (rank, item) in items.iter().enumerate() {
+            assert_eq!(item["rank"], rank + 1);
+            let id = item["passage_id"].as_str().unwrap();
+            assert!(ids.insert(id));
+            let exact = execute(&["get", id]);
+            let mut citation = exact["result"].as_object().unwrap().clone();
+            citation.remove("kind");
+            citation.insert("rank".into(), json!(rank + 1));
+            assert_eq!(item, &Value::Object(citation));
+            let revision = execute(&["get", item["revision_id"].as_str().unwrap()]);
+            assert_eq!(
+                revision["result"]["text"].as_str().unwrap().get(
+                    item["start_byte"].as_u64().unwrap() as usize
+                        ..item["end_byte"].as_u64().unwrap() as usize
+                ),
+                item["text"].as_str()
+            );
+        }
+        println!("PASS relevance case {}: query={query:?}; top5={}", index + 1,
+            serde_json::to_string(&items.iter().map(|item| json!({"rank":item["rank"],"title":item["title"],"passage_id":item["passage_id"]})).collect::<Vec<_>>()).unwrap());
+        if index == 0 {
+            assert_eq!(execute(&["search", query, "--limit", &limit]), result);
+        }
+    }
+    let filtered = execute(&[
+        "search",
+        "Lantern",
+        "--source-type",
+        "note",
+        "--since",
+        "2026-09-27T19:00:00.000000001-05:00",
+        "--limit",
+        "50",
+    ]);
+    assert!(!filtered["result"]["items"].as_array().unwrap().is_empty());
+    for item in filtered["result"]["items"].as_array().unwrap() {
+        assert_eq!(item["source_type"], "note");
+        assert_eq!(item["occurred_at"], "2026-09-28T00:00:00.000000001Z");
+    }
+    for args in [
+        vec!["search", "Lantern", "--source-type", "absent"],
+        vec![
+            "search",
+            "Lantern",
+            "--since",
+            "2026-09-28T00:00:00.000000002Z",
+        ],
+    ] {
+        assert_eq!(
+            execute(&args)["result"],
+            json!({"items":[],"truncated":false})
+        );
+    }
+    assert_eq!(
+        execute(&["search", "Lantern", "--limit", "0"])["result"],
+        json!({"items":[],"truncated":true})
+    );
+
+    let models: Value =
+        serde_json::from_str(include_str!("../spikes/rust-packaging/models.json")).unwrap();
+    let embedding_only = store.directory.path().join("embedding-only");
+    for file in models[0]["files"].as_array().unwrap() {
+        let name = file[0].as_str().unwrap();
+        let destination = embedding_only.join(EMBEDDING_REVISION).join(name);
+        std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        std::fs::hard_link(cache.join(EMBEDDING_REVISION).join(name), destination).unwrap();
+    }
+    for args in [
+        vec!["search", "Lantern"],
+        vec!["search", "Lantern", "--limit", "0"],
+        vec!["search", "Lantern", "--source-type", "absent"],
+    ] {
+        let output = store
+            .command()
+            .env("COMMONPLACE_MODEL_CACHE", &embedding_only)
+            .args(args)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty());
+        let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(error["error"]["code"], "model_unavailable");
+        assert!(
+            error["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains(commonplace::providers::reranker::RERANKER_REVISION)
+        );
+    }
+    let hf_home = store.directory.path().join("search-hf-home");
+    let stock = hf_hub::Cache::new(hf_home.join("hub"));
+    for model in models.as_array().unwrap() {
+        let revision = model["revision"].as_str().unwrap();
+        let repo = stock.repo(hf_hub::Repo::with_revision(
+            model["repository"].as_str().unwrap().into(),
+            hf_hub::RepoType::Model,
+            revision.into(),
+        ));
+        repo.create_ref(revision).unwrap();
+        for file in model["files"].as_array().unwrap() {
+            let name = file[0].as_str().unwrap();
+            let destination = repo.pointer_path(revision).join(name);
+            std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+            std::fs::hard_link(cache.join(revision).join(name), destination).unwrap();
+        }
+    }
+    let output = store
+        .command()
+        .env_remove("COMMONPLACE_MODEL_CACHE")
+        .env("HF_HOME", &hf_home)
+        .args(["search", "Lantern", "--limit", "0"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+    assert_eq!(
+        serde_json::from_slice::<Value>(&output.stdout).unwrap()["result"],
+        json!({"items":[],"truncated":true})
+    );
+
+    use commonplace::providers::reranker::{LocalReranker, Reranker};
+    let mut reranker = LocalReranker::new(Some(cache.clone()));
+    let texts = [
+        "Support escalation guide",
+        "Community volunteer supplies",
+        "Lantern pilot schedule",
+    ];
+    let scores = reranker.rerank("Lantern pilot schedule", &texts).unwrap();
+    assert_eq!(
+        scores,
+        reranker.rerank("Lantern pilot schedule", &texts).unwrap()
+    );
+    assert_eq!(scores.len(), texts.len());
+    assert!(scores.iter().all(|score| score.is_finite()));
+    assert!(scores[2] > scores[0] && scores[2] > scores[1]);
+    println!(
+        "PASS public-binary pinned-model search: 36 source documents, 4/4 top-5 relevance cases, repeat order, exact get citations, filters, zero/empty output, required reranker failure, verified stock cache hit and retained reranker session; cache={}",
+        cache.display()
+    );
+}
+
+#[test]
+#[ignore = "requires prepared pinned COMMONPLACE_MODEL_CACHE; explicitly run offline, never downloads or skips"]
 fn real_model_ingest_get_offline() {
     let cache = PathBuf::from(
         std::env::var_os("COMMONPLACE_MODEL_CACHE")

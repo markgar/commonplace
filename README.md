@@ -7,7 +7,7 @@ hybrid SQLite search, explicitly authored cited knowledge, and local graph
 queries.
 
 The Rust implementation supports store initialization, additive vocabulary,
-local-file ingestion, exact document/revision/passage reads, and read-only RDF
+local-file ingestion, hybrid search, exact document/revision/passage reads, and read-only RDF
 graph queries and rebuild:
 
 ```sh
@@ -247,11 +247,54 @@ passage-representation settings:
 | `--max-json-bytes` | 1,048,576 (metadata argument) |
 | `--writer-lock-timeout-ms` | 2,000 |
 
-Stdin, JSON Lines, manifests, and hybrid search are not yet implemented.
+Stdin, JSON Lines, and manifests are not yet implemented.
 `ingest --describe` describes only the implemented file-command options as JSON,
 with the same generated validator used for execution and a valid example.
 
-### Local embedding cache
+## Hybrid search
+
+```sh
+cargo run --bin commonplace -- --store .commonplace search 'Lantern pilot schedule' --limit 5
+cargo run --bin commonplace -- --store .commonplace search 'escalation acknowledgement' \
+  --since '2026-09-21T00:00:00Z' --source-type note --source-type recap --limit 10 --json
+```
+
+Search returns ranked current-revision passages with complete exact citations:
+the document/revision/passage IDs, source key/title/type/time/metadata, ordinal,
+and half-open byte offsets from `get`, plus 1-based `rank`. The common `search`
+envelope has `result: {items, truncated}`. Empty results are
+`{"items":[],"truncated":false}`. There is no score threshold: unrelated queries
+can return nearest passages rather than an empty list.
+
+The query is plain text, not FTS syntax. Whitespace-separated terms are safely
+quoted and ORed for FTS5; the original query goes to the pinned embedding and
+reranker. Queries must be nonblank, contain no NUL, and fit 4096 UTF-8 bytes and
+64 terms. `--limit` defaults to **10**, accepts **0–50**, and never disables model
+validation. `--since` is inclusive RFC3339 source time, with nanosecond precision;
+it excludes unknown times. Source type filters are exact and case-sensitive,
+ORed when repeated, with at most 32 supplied values and 4096 aggregate UTF-8 bytes.
+Files ingested without metadata overrides have source type `file` and null time;
+dates written in Markdown are not automatically extracted.
+
+Both paths apply the same filters before retaining 64 candidates each. Vector
+distance is evaluated by sqlite-vec inside SQLite, not by an application vector
+scan; its native exhaustive work scales with the eligible corpus. BM25 and
+distance ties use passage IDs. Equal-weight reciprocal-rank fusion (constant 60)
+deduplicates candidates, then the pinned local reranker processes at most 64
+passages in batches of eight. Fusion ties use passage IDs; final-score ties use
+fusion order. Both retrieval paths and hydration share one SQLite read snapshot.
+
+`truncated: true` means a candidate sentinel proved additional candidates, the
+fusion set exceeded the rerank cap, or final results exceeded `--limit`. It is
+not an exhaustive relevance claim and does not describe tokenizer truncation:
+embedding inputs use a 256-token window; reranker query/passage pairs use 512.
+Inference may shorten inputs, but returned evidence always contains the full
+exact passage. Zero limit returns no items and reports whether retrieval omitted
+any. Required-model errors still fail even for empty results or zero limit;
+search never falls back to lexical-only. Missing/extra index rows or incompatible
+vector declarations fail without repair or changes to the store.
+
+### Local model cache
 
 Changed nonempty documents lazily load one local FastEmbed 7.1.0/ONNX Runtime
 session per command. The embedding is
@@ -264,14 +307,17 @@ Source text and metadata never enter a network request.
 Without an override, the stock synchronous `hf-hub` 0.5.0 cache is used:
 `$HF_HOME/hub`, or `~/.cache/huggingface/hub` if `HF_HOME` is unset. This client
 does not use `HF_HUB_CACHE`. Cache hits are verified without a network probe;
-missing embedding artifacts are acquired from the exact immutable revision at
-`https://huggingface.co`. No reranker is acquired. Public artifact requests use no
+missing artifacts are acquired from the exact immutable revision at
+`https://huggingface.co`. Ingestion acquires only the embedding; search also loads
+`jinaai/jina-reranker-v1-turbo-en@b8c14f4e723d9e0aab4732a7b7b93741eeeb77c2`
+through the same verified cache path. Public artifact requests use no
 credentials. Network/policy failures are reported as `model_unavailable`; no
 alternate provider or revision is tried.
 
 Set `COMMONPLACE_MODEL_CACHE` for a **strict offline** deployment or test cache
 using `<cache>/<revision>/<filename>` (the P2 cache layout). All five embedding
-artifacts must be present. Missing or corrupt files fail explicitly; this override
+artifacts must be present for embedding, and search also requires all five pinned
+reranker artifacts. Missing or corrupt files fail explicitly; this override
 never downloads or replaces anything. Corrupt ordinary cache hits also fail
 without automatic replacement. Unchanged and empty documents require no model.
 
@@ -301,6 +347,9 @@ the prepared cache and fails, rather than skipping, if it is absent or corrupt:
 COMMONPLACE_MODEL_CACHE=/absolute/path/to/prepared/pinned-models \
   cargo test --locked --offline --test real_models -- \
   --ignored --exact real_model_ingest_get_offline --nocapture
+COMMONPLACE_MODEL_CACHE=/absolute/path/to/prepared/pinned-models \
+  cargo test --locked --offline --test real_models -- \
+  --ignored --exact real_model_search_offline --nocapture
 ```
 
 This target runs the public binary over multiple files, repeats ingestion, makes
@@ -313,6 +362,14 @@ cache. On macOS, prefix `cargo` with
 `sandbox-exec -p '(version 1)(allow default)(deny network*)'` to enforce network
 denial for the test and its binary children. This is local runtime evidence,
 not other-platform or clean-machine release validation.
+
+The search invocation ingests only the 36 Riley source documents under
+`Obsidian Notes` and `AI Summaries`, excluding the fixture guides. It evaluates
+four checked-in top-five source/quote expectations in
+[`fixtures/search-relevance.json`](fixtures/search-relevance.json), repeat order,
+exact `get` citation parity, filtered/empty/zero results, and required reranker
+failures. These are bounded retrieval expectations, not support for arbitrary
+natural-language questions or generated answers.
 
 Run development checks locally. GitHub Actions CI is disabled to conserve
 Actions usage; enabling or dispatching workflows requires explicit approval.

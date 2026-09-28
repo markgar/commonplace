@@ -263,6 +263,32 @@ They do not expose candidate-stage membership, model identities, fusion
 contributions, or retained search explanations. A narrow debug response may be
 added only when retrieval evaluation requires it.
 
+The positional query is plain text, not raw FTS syntax. Whitespace-delimited
+terms are individually quoted/escaped and ORed for lexical matching; both models
+receive the original query. Blank/NUL queries are rejected. A query is bounded
+to 4096 UTF-8 bytes and 64 terms. Repeatable source types are case-sensitive
+exact alternatives, bounded to 32 supplied values and 4096 aggregate UTF-8 bytes;
+empty/NUL values are rejected. `--since` is an inclusive RFC3339 instant normalized
+to UTC without discarding fractional seconds. Unknown source times are excluded
+only when that filter is present.
+
+`--limit` defaults to 10 and accepts 0 through 50. Search returns the common
+envelope with operation `search`, status `complete`, and result `{items, truncated}`.
+Each item has 1-based `rank` plus the same complete evidence fields as passage
+`get`. Empty eligible results return `items: []`. Zero limit retains no items,
+but still checks required models and indexes.
+
+`truncated` reports collection omissions: a candidate sentinel proves more
+candidates, fusion exceeds the rerank bound, or final results exceed `--limit`.
+It does not report tokenizer windows: the pinned embedding uses 256 tokens and
+the reranker uses 512 tokens per query/passage pair. Model windows may shorten
+inference inputs; returned citations always contain the exact full passage.
+There is no relevance threshold or promise of exhaustive relevant results;
+an unrelated query can return nearest passages. Missing/corrupt required models
+fail even for an empty corpus or zero limit. Invalid values use `invalid_input`,
+input bounds use `limit_exceeded`, and incompatible indexes use `conflict`,
+following the common stderr error envelope and exit conventions.
+
 ## 6. Knowledge schema
 
 The user defines an additive vocabulary:

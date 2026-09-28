@@ -1,13 +1,9 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
+use crate::{CommonplaceError, Result};
 use fastembed::{
     InitOptionsUserDefined, Pooling, TextEmbedding, TokenizerFiles, UserDefinedEmbeddingModel,
 };
-use hf_hub::{Cache, Repo, RepoType, api::sync::ApiBuilder};
-use sha1::Sha1;
-use sha2::{Digest, Sha256};
-
-use crate::{CommonplaceError, Result};
 
 pub const EMBEDDING_DIMENSIONS: usize = 384;
 pub const EMBEDDING_REVISION: &str = "8f518e882455312b086101e60691f5e6e2f05c3c";
@@ -36,18 +32,15 @@ impl LocalEmbeddingModel {
     }
 
     fn load(&self) -> Result<TextEmbedding> {
-        let hub_cache = self.cache.is_none().then(Cache::from_env);
         let artifact = |name, hash, sha256| {
-            let path = match (&self.cache, &hub_cache) {
-                (Some(cache), _) => cache.join(EMBEDDING_REVISION).join(name),
-                (_, Some(cache)) => hub_artifact(cache, name)?,
-                _ => {
-                    return Err(CommonplaceError::ModelUnavailable(
-                        "model cache is unavailable".into(),
-                    ));
-                }
-            };
-            verified(&path, hash, sha256)
+            super::artifacts::artifact(
+                self.cache.as_deref(),
+                EMBEDDING_REPOSITORY,
+                EMBEDDING_REVISION,
+                name,
+                hash,
+                sha256,
+            )
         };
         let tokenizer = TokenizerFiles {
             tokenizer_file: artifact(
@@ -149,50 +142,11 @@ pub fn validate_vectors(vectors: &[Vec<f32>], expected: usize) -> Result<()> {
     Ok(())
 }
 
-fn hub_artifact(cache: &Cache, name: &str) -> Result<PathBuf> {
-    let repo = Repo::with_revision(
-        EMBEDDING_REPOSITORY.into(),
-        RepoType::Model,
-        EMBEDDING_REVISION.into(),
-    );
-    if let Some(path) = cache.repo(repo.clone()).get(name) {
-        return Ok(path);
-    }
-    // Public immutable artifacts need no credentials. Cache hits never make a request.
-    ApiBuilder::from_cache(cache.clone()).with_token(None).with_progress(false).build()
-        .and_then(|api| api.repo(repo).get(name))
-        .map_err(|error| CommonplaceError::ModelUnavailable(format!(
-            "cannot acquire {EMBEDDING_REPOSITORY}@{EMBEDDING_REVISION}/{name} from https://huggingface.co: {error}; check network access or use a prepared COMMONPLACE_MODEL_CACHE"
-        )))
-}
-
-fn verified(path: &Path, expected: &str, sha256: bool) -> Result<Vec<u8>> {
-    let bytes = std::fs::read(path).map_err(|error| {
-        CommonplaceError::ModelUnavailable(format!(
-            "cannot read pinned model artifact {}: {error}; prepare the exact pinned cache",
-            path.display()
-        ))
-    })?;
-    let actual = if sha256 {
-        format!("{:x}", Sha256::digest(&bytes))
-    } else {
-        let mut hash = Sha1::new();
-        hash.update(format!("blob {}\0", bytes.len()));
-        hash.update(&bytes);
-        format!("{:x}", hash.finalize())
-    };
-    if actual != expected {
-        return Err(CommonplaceError::ModelUnavailable(format!(
-            "incompatible pinned model artifact {}; expected {expected}, found {actual}",
-            path.display()
-        )));
-    }
-    Ok(bytes)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::artifacts::{hub_artifact, verified};
+    use hf_hub::{Cache, Repo, RepoType};
 
     #[test]
     fn lazy_failure_is_retained_and_bounds_do_not_load() {
@@ -225,7 +179,16 @@ mod tests {
         std::fs::create_dir_all(&directory).unwrap();
         let path = directory.join("tokenizer.json");
         std::fs::write(&path, b"corrupt").unwrap();
-        assert_eq!(hub_artifact(&cache, "tokenizer.json").unwrap(), path);
+        assert_eq!(
+            hub_artifact(
+                &cache,
+                EMBEDDING_REPOSITORY,
+                EMBEDDING_REVISION,
+                "tokenizer.json"
+            )
+            .unwrap(),
+            path
+        );
         assert!(
             verified(&path, "20cb6e457867e03c181180a296809275d3e40a7d", false)
                 .unwrap_err()

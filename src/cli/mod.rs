@@ -37,6 +37,20 @@ enum Command {
     },
     /// Ingest local UTF-8 files; each file succeeds or fails independently.
     Ingest(ingest::IngestArgs),
+    /// Retrieve current exact passages using lexical/vector search and local reranking.
+    Search {
+        /// Plain text, not FTS syntax (maximum 4096 UTF-8 bytes and 64 terms).
+        query: String,
+        /// Inclusive source time (RFC3339); excludes sources without a time.
+        #[arg(long)]
+        since: Option<String>,
+        /// Exact source type; repeat to match any supplied type.
+        #[arg(long = "source-type")]
+        source_types: Vec<String>,
+        /// Retained results, 0 through 50; required models are checked even at zero.
+        #[arg(long, default_value_t = crate::domain::search::DEFAULT_RESULT_LIMIT)]
+        limit: usize,
+    },
     /// Read document metadata, revision text, or an exact passage.
     Get { id: String },
     /// Apply or inspect your vocabulary (entity types, predicates, and identifiers).
@@ -139,6 +153,32 @@ fn execute(cli: Cli) -> Result<CommandResponse> {
             )),
         },
         Command::Ingest(args) => ingest::execute(&cli.store, args),
+        Command::Search {
+            query,
+            since,
+            source_types,
+            limit,
+        } => {
+            let cache = std::env::var_os("COMMONPLACE_MODEL_CACHE").map(PathBuf::from);
+            let mut embedding =
+                crate::providers::embeddings::LocalEmbeddingModel::new(cache.clone(), 1);
+            let mut reranker = crate::providers::reranker::LocalReranker::new(cache);
+            Ok(CommandResponse::new(
+                "search",
+                "complete",
+                CommandResult::Search(crate::app::search::search(
+                    &cli.store,
+                    &crate::domain::search::SearchRequest {
+                        query,
+                        since,
+                        source_types,
+                        limit,
+                    },
+                    &mut embedding,
+                    &mut reranker,
+                )?),
+            ))
+        }
         Command::Get { id } => Ok(CommandResponse::new(
             "get",
             "complete",
@@ -207,6 +247,7 @@ impl Command {
             Self::Init => "init",
             Self::Ingest(args) if args.describe => "ingest.describe",
             Self::Ingest(_) => "ingest",
+            Self::Search { .. } => "search",
             Self::Get { .. } => "get",
             Self::Schema {
                 command: SchemaCommand::Show,
