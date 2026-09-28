@@ -11,8 +11,19 @@ const FORMAT: &str = "commonplace-user-config/1";
 #[serde(deny_unknown_fields)]
 struct UserConfig {
     format: String,
+    #[serde(default, deserialize_with = "deserialize_optional_path")]
     store: Option<PathBuf>,
+    #[serde(default, deserialize_with = "deserialize_optional_path")]
     model_cache: Option<PathBuf>,
+}
+
+fn deserialize_optional_path<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<PathBuf>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    PathBuf::deserialize(deserializer).map(Some)
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -417,6 +428,8 @@ mod tests {
         for input in [
             r#"{"format":"commonplace-user-config/1","unknown":true}"#,
             r#"{"format":"commonplace-user-config/1","store":"relative"}"#,
+            r#"{"format":"commonplace-user-config/1","store":null}"#,
+            r#"{"format":"commonplace-user-config/1","model_cache":null}"#,
             r#"{"format":"future"}"#,
             r#"{"format":"commonplace-user-config/1","store":"/one","store":"/two"}"#,
             "{",
