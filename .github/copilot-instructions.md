@@ -57,11 +57,14 @@ specifically needed and authorized.
 
 Do not merge unless explicitly requested.
 
-## Packet progress and handoffs
+## Packet planning, coordination, and handoffs
 
-Before starting/resuming a packet or reporting build progress, follow the
+Before implementation planning, orchestrating parallel packets or subsessions,
+approving a plan, starting/resuming a packet, or reporting build progress, follow the
 repo-local [`commonplace-progress` skill](skills/commonplace-progress/SKILL.md).
 If the client has not discovered the skill, read that file directly.
+Every packet plan requires an independent `rubber-duck` agent review before
+coordinator approval or implementation, as detailed in that skill.
 The implementation plan links the packet issues; issues own live status,
 ownership, blockers, PRs, and evidence. Update them at meaningful transitions.
 Do not equate a committed change, idle session, or closed issue with integration.
