@@ -742,13 +742,15 @@ and does not silently truncate authoritative state. Existing source-size and
 per-request write limits bound individual stored values; cumulative revision
 and entity histories may grow with use.
 
-P3 implements document, revision, and passage selectors. Its result has
-`kind: document | revision | passage` plus the complete record fields. A document
+`get` results have `kind: document | revision | passage | entity | knowledge`
+plus the complete record fields. A document
 includes all `revision_ids` in revision-number order and `current_revision_id`;
 a revision includes all `passage_ids` in ordinal order. A passage includes source
 key, revision number, ordinal, exact text and byte offsets, and the revision's
-title/type/time/metadata. Missing supported IDs yield `not_found`. Entity and
-knowledge selectors remain explicitly unsupported until their owning packets.
+title/type/time/metadata. An entity includes aliases, identifiers, and active
+type, membership, and fact IDs. A knowledge item includes its membership or fact
+subtype, schema version, creation/withdrawal provenance, and exact support,
+including an empty support array. Missing supported IDs yield `not_found`.
 
 `commonplace schema show` returns the complete user vocabulary from SQLite.
 `commonplace graph schema` returns the stable RDF mapping, reserved namespaces
