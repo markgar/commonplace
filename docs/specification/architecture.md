@@ -281,7 +281,12 @@ combining passages from multiple documents is an optional optimization.
 
 A malformed JSON Lines record or source key repeated earlier in the same stream
 is a failed item. It does not roll back documents already published by that
-command.
+command. Generic stdin/JSON Lines readers accept caller-normalized text; they
+perform no acquisition, fetching, or format extraction. JSON Lines is read with
+bounded buffers; oversized records, I/O failures, and document-cap overflow
+produce terminal failed items without draining remaining input. Known-count
+file requests retain their pre-publication limit check. Manifest input is
+deferred outside the current release scope.
 
 Within a document transaction it writes the document revision, passages, FTS
 rows, and vector rows. When replacing the current revision, it explicitly
@@ -515,7 +520,7 @@ Errors are typed by responsibility:
 
 Infrastructure translates SQLite, model, and Oxigraph failures once at its
 boundary. The CLI maps typed errors to stable JSON codes, actionable messages,
-and exit codes. Invalid command options and manifest envelopes fail before item
+and exit codes. Invalid command options fail before item
 processing. JSON Lines parse errors, duplicate streamed source keys, and
 document failures are per-item errors and may produce `partial`; schema,
 knowledge, and withdrawal requests return one success or failure for the

@@ -7,8 +7,8 @@ hybrid SQLite search, explicitly authored cited knowledge, and local graph
 queries.
 
 The Rust implementation supports store initialization, additive vocabulary,
-local-file ingestion, hybrid search, exact document/revision/passage reads, and read-only RDF
-graph queries and rebuild:
+file and generic stdin/JSONL ingestion, hybrid search, exact document/revision/passage
+reads, and read-only RDF graph queries and rebuild:
 
 ```sh
 cargo run --bin commonplace -- --store .commonplace init
@@ -244,12 +244,73 @@ passage-representation settings:
 | `--max-documents` | 1,000 |
 | `--max-passages` | 10,000 per document |
 | `--embedding-batch-size` | 32 |
-| `--max-json-bytes` | 1,048,576 (metadata argument) |
+| `--max-json-bytes` | 1,048,576 (metadata argument/canonical metadata and each encoded JSONL record) |
 | `--writer-lock-timeout-ms` | 2,000 |
 
-Stdin, JSON Lines, and manifests are not yet implemented.
-`ingest --describe` describes only the implemented file-command options as JSON,
-with the same generated validator used for execution and a valid example.
+### Caller-prepared text and JSON Lines
+
+Agents and other callers own acquisition and extraction. Commonplace accepts
+their exact normalized UTF-8 text; it does not fetch URLs, connect to services,
+or extract email/PDF contents.
+
+```sh
+printf 'Riley approved the draft.\n' |
+  commonplace ingest --stdin --source-key notes/42 \
+    --title 'Draft decision' --metadata '{"project":"riley"}'
+commonplace ingest --jsonl batch.jsonl
+producer | commonplace ingest --jsonl -
+```
+
+`--stdin` ingests one document with a required opaque `--source-key`. Existing
+metadata flags apply to that document. Streamed defaults are null title/time,
+source type `text`, and metadata `{}`. Empty text is valid. Keys are nonempty
+and NUL-free, are not trimmed or normalized, and share the same namespace as
+file keys. Reusing a key with identical text/metadata returns `unchanged`;
+changing metadata or text creates an immutable revision of the same document.
+Changing the key creates a different document.
+
+Each JSONL physical line is a self-contained record:
+
+```json
+{"source_key":"notes/42","text":"Riley approved the draft.\n","title":"Draft decision","metadata":{"project":"riley"}}
+{"source_key":"notes/43","text":"Review on Friday.\n","source_type":"note","occurred_at":"2026-09-28T10:00:00-05:00"}
+```
+
+`source_key` and `text` are required strings. Optional fields are `title`,
+`source_type`, `occurred_at`, and `metadata`. Unknown fields and duplicate object
+keys (including inside metadata) fail the item. JSONL does not accept global
+metadata overrides or directory scan options. Exactly one input mode is allowed;
+`--stdin` and `--jsonl -` cannot be selected together.
+
+LF/CRLF delimiters are framing, not source text. Escaped text inside a record
+is preserved exactly. A final line without a delimiter is valid; blank lines
+and invalid UTF-8/JSON fail individually and processing continues. Empty input
+returns an empty complete result. Input labels are `stdin`, `stdin:1`, or
+`batch.jsonl:1` (1-based physical line).
+
+The JSON limit bounds each encoded line excluding LF/CRLF, independently of the
+decoded source-byte limit and canonical metadata limit. A document near the
+10 MiB source limit requires raising the JSON limit, including escape overhead.
+An oversized line stops with one terminal `limit_exceeded` item without draining
+the rest of the input. Every record, including failed records, consumes a
+document slot; excess input produces one terminal failed item without parsing
+or publishing another record. Stream read failures likewise terminate with an
+`internal_error` item. Prior successful publications remain saved. Existing
+file requests still reject excessive known document counts before publication.
+Readers buffer one bounded record; retained identities/results grow with the
+configured document and record limits rather than holding all document bodies.
+
+All modes use the existing stdout result and exit precedence above; raw stdin
+body failures are item errors, not command-level errors. Invalid command options
+and failure opening a JSONL file use the existing command-error path.
+`ingest --describe` provides generated command `input_schema`/`example` and
+ingest-only JSONL `record_schema`/`record_example` fields, using the execution
+validators. Command `source_type: null` means resolve the mode default, not
+store a null source type. Semantic checks also enforce canonical metadata,
+timestamps, byte limits, and duplicate fields.
+
+Manifest input is explicitly deferred; saved JSONL supplies the current generic
+batch workflow.
 
 ## Hybrid search
 
@@ -350,15 +411,20 @@ COMMONPLACE_MODEL_CACHE=/absolute/path/to/prepared/pinned-models \
 COMMONPLACE_MODEL_CACHE=/absolute/path/to/prepared/pinned-models \
   cargo test --locked --offline --test real_models -- \
   --ignored --exact real_model_search_offline --nocapture
+COMMONPLACE_MODEL_CACHE=/absolute/path/to/prepared/pinned-models \
+  cargo test --locked --offline --test real_models -- \
+  --ignored --exact real_model_stream_ingest_get_offline --nocapture
 ```
 
-This target runs the public binary over multiple files, repeats ingestion, makes
-metadata and content revisions, reads exact old/new evidence, and checks current
+The file check runs the public binary over multiple files, repeats ingestion,
+makes metadata and content revisions, reads exact old/new evidence, and checks current
 FTS/vector IDs on a version-2 store. It verifies ingestion leaves graph files
 unchanged, then rebuilds empty and fixture-backed membership graphs and compares
-their old/new passage citations with exact reads. It also verifies offline hits
-through the standard `HF_HOME`
-cache. On macOS, prefix `cargo` with
+their old/new passage citations with exact reads. The stream check runs real
+nonempty stdin/JSONL submissions, unchanged and metadata-only reruns, partial
+failures, exact old reads, and current index/unchanged graph checks. The file
+check also verifies offline hits through the standard `HF_HOME` cache.
+On macOS, prefix `cargo` with
 `sandbox-exec -p '(version 1)(allow default)(deny network*)'` to enforce network
 denial for the test and its binary children. This is local runtime evidence,
 not other-platform or clean-machine release validation.

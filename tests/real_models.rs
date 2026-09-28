@@ -253,6 +253,99 @@ fn real_model_search_offline() {
 
 #[test]
 #[ignore = "requires prepared pinned COMMONPLACE_MODEL_CACHE; explicitly run offline, never downloads or skips"]
+fn real_model_stream_ingest_get_offline() {
+    let cache = PathBuf::from(
+        std::env::var_os("COMMONPLACE_MODEL_CACHE")
+            .expect("set COMMONPLACE_MODEL_CACHE to the prepared pinned cache"),
+    );
+    let store = Store::new();
+    let graph_before = store.graph_files();
+    let run = |args: &[&str], bytes: &[u8]| -> (i32, Value) {
+        let mut command = store.command();
+        command.args(args).env("COMMONPLACE_MODEL_CACHE", &cache);
+        let output = common::with_stdin(command, bytes);
+        assert!(output.stderr.is_empty(), "{output:?}");
+        (
+            output.status.code().unwrap(),
+            serde_json::from_slice(&output.stdout).unwrap(),
+        )
+    };
+    let text = "\u{feff}Riley approved the draft.\r\n\r\nExact \0 e\u{301} \u{1f980}\n";
+    let (exit, added) = run(
+        &["ingest", "--stdin", "--source-key", "notes/42"],
+        text.as_bytes(),
+    );
+    assert_eq!(exit, 0);
+    let first = &added["result"]["items"][0];
+    assert!(!first["passage_ids"].as_array().unwrap().is_empty());
+    let original = store.success(&["get", first["revision_id"].as_str().unwrap()]);
+    assert_eq!(original["result"]["text"], text);
+    let mut record = json!({"source_key":"notes/42","text":text});
+    let (exit, same) = run(
+        &["ingest", "--jsonl", "-"],
+        &serde_json::to_vec(&record).unwrap(),
+    );
+    assert_eq!(exit, 0);
+    assert_eq!(same["result"]["summary"]["unchanged"], 1);
+    assert_eq!(
+        same["result"]["items"][0]["revision_id"],
+        first["revision_id"]
+    );
+    record["metadata"] = json!({"project":"riley"});
+    let (exit, changed) = run(
+        &["ingest", "--jsonl", "-"],
+        &serde_json::to_vec(&record).unwrap(),
+    );
+    assert_eq!(exit, 0);
+    assert_eq!(changed["result"]["summary"]["updated"], 1);
+    assert_eq!(
+        changed["result"]["items"][0]["document_id"],
+        first["document_id"]
+    );
+    assert_ne!(
+        changed["result"]["items"][0]["revision_id"],
+        first["revision_id"]
+    );
+    let lines = format!(
+        "{}\n{{bad}}\n{}\n{}\n",
+        record,
+        record,
+        json!({"source_key":"notes/43","text":"Review the draft on Friday."})
+    );
+    let (exit, partial) = run(&["ingest", "--jsonl", "-"], lines.as_bytes());
+    assert_eq!(exit, 2);
+    assert_eq!(
+        partial["result"]["summary"],
+        json!({"added":1,"updated":0,"unchanged":1,"failed":2})
+    );
+    assert_eq!(
+        store.success(&["get", first["revision_id"].as_str().unwrap()]),
+        original
+    );
+    let session = SqliteDatabase::read(&store.root).unwrap();
+    let ids = |sql: &str| {
+        session
+            .connection()
+            .prepare(sql)
+            .unwrap()
+            .query_map([], |row| row.get::<_, i64>(0))
+            .unwrap()
+            .map(std::result::Result::unwrap)
+            .collect::<Vec<_>>()
+    };
+    let current = ids("SELECT passage_id FROM passages p JOIN document_revisions r USING(revision_id)
+        WHERE r.revision_number = (SELECT max(revision_number) FROM document_revisions WHERE document_id = r.document_id)
+        ORDER BY passage_id");
+    assert_eq!(ids("SELECT rowid FROM passage_fts ORDER BY rowid"), current);
+    assert_eq!(
+        ids("SELECT passage_id FROM passage_vectors ORDER BY passage_id"),
+        current
+    );
+    assert_eq!(store.graph_files(), graph_before);
+}
+
+#[test]
+#[ignore = "requires prepared pinned COMMONPLACE_MODEL_CACHE; explicitly run offline, never downloads or skips"]
 fn real_model_ingest_get_offline() {
     let cache = PathBuf::from(
         std::env::var_os("COMMONPLACE_MODEL_CACHE")

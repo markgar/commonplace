@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use std::collections::BTreeMap;
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
@@ -10,6 +11,26 @@ use serde_json::{Value, json};
 pub struct Store {
     pub directory: tempfile::TempDir,
     pub root: PathBuf,
+}
+
+pub fn with_stdin(mut command: Command, bytes: &[u8]) -> Output {
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("run CLI with stdin");
+    let mut stdin = child.stdin.take().unwrap();
+    std::thread::scope(|scope| {
+        let writer = scope.spawn(move || {
+            if let Err(error) = stdin.write_all(bytes) {
+                assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe);
+            }
+        });
+        let output = child.wait_with_output().expect("read CLI output");
+        writer.join().unwrap();
+        output
+    })
 }
 
 impl Store {

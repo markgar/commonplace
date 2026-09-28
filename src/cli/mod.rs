@@ -35,8 +35,8 @@ enum Command {
         #[command(subcommand)]
         command: GraphCommand,
     },
-    /// Ingest local UTF-8 files; each file succeeds or fails independently.
-    Ingest(ingest::IngestArgs),
+    /// Ingest UTF-8 files or caller-prepared stdin/JSONL; each document succeeds or fails independently.
+    Ingest(Box<ingest::IngestArgs>),
     /// Retrieve current exact passages using lexical/vector search and local reranking.
     Search {
         /// Plain text, not FTS syntax (maximum 4096 UTF-8 bytes and 64 terms).
@@ -152,7 +152,7 @@ fn execute(cli: Cli) -> Result<CommandResponse> {
                 CommandResult::GraphRebuild(graph::rebuild(&cli.store)?),
             )),
         },
-        Command::Ingest(args) => ingest::execute(&cli.store, args),
+        Command::Ingest(args) => ingest::execute(&cli.store, *args),
         Command::Search {
             query,
             since,
@@ -284,7 +284,7 @@ mod tests {
             ),
             (
                 vec!["commonplace", "ingest", "--help"],
-                "each file succeeds or fails independently",
+                "each document succeeds or fails independently",
             ),
             (
                 vec!["commonplace", "get", "--help"],
