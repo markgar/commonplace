@@ -68,13 +68,13 @@ macOS x64 is not a release target.
 
 2. **Store and source slice**
 
-   Implement `kg init`, store-format validation, source identity, immutable
+   Implement `commonplace init`, store-format validation, source identity, immutable
    revisions, and one-document and batch transactions.
 
 3. **Ingestion slice**
 
    Add passage generation, FTS rows, vector rows, bounded embedding batches, and
-   complete `kg ingest` results.
+   complete `commonplace ingest` results.
 
 4. **Retrieval slice**
 
@@ -213,7 +213,7 @@ A release candidate must pass this sequence from an empty store:
 - Ordinary document ingestion does not rebuild the graph.
 - Evidence can be traversed directly from knowledge to passage and source.
 - Graph and SQLite versions must match before query execution.
-- A version mismatch is recoverable with `kg graph rebuild`.
+- A version mismatch is recoverable with `commonplace graph rebuild`.
 - Graph publication cannot replace files held by an active graph reader.
 - Cypher mutations are rejected natively.
 - Row limits are enforced.

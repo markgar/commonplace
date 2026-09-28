@@ -40,7 +40,7 @@ The database contains 15 ordinary tables and two virtual search tables:
 ```sql
 CREATE TABLE store_state (
     singleton         INTEGER PRIMARY KEY CHECK (singleton = 1),
-    format            TEXT NOT NULL CHECK (format = 'kg-v2/1'),
+    format            TEXT NOT NULL CHECK (format = 'commonplace-store/1'),
     schema_version    INTEGER NOT NULL DEFAULT 0 CHECK (schema_version >= 0),
     knowledge_version INTEGER NOT NULL DEFAULT 0 CHECK (knowledge_version >= 0),
     created_at        TEXT NOT NULL
@@ -232,7 +232,8 @@ Aliases and identifiers are case-sensitive exact strings. Identifiers uniquely
 resolve an entity within a scheme. Name and alias lookups may return multiple
 candidates and therefore cannot silently resolve ambiguity.
 
-Metadata corrections may delete aliases and identifiers through `kg record`.
+Metadata corrections may delete aliases and identifiers through
+`commonplace record`.
 The request must identify the owning entity by canonical ID. Deletion is
 transactional, does not delete the entity, and is not retained as knowledge
 history.
@@ -386,7 +387,8 @@ One transaction deletes the document tree and evidence links, identifies
 affected knowledge, increments `knowledge_version`, and produces the candidate
 graph snapshot.
 
-Hybrid search and exact `kg get` operations each use one SQLite read transaction.
+Hybrid search and exact `commonplace get` operations each use one SQLite read
+transaction.
 
 ## 12. Deletion behavior
 
@@ -450,7 +452,7 @@ limits, and float rejection.
 `revision_digest` is lowercase SHA-256 over this length-delimited preimage:
 
 ```text
-"kg-v2-revision\0"
+"commonplace-revision/1\0"
 length(text UTF-8)          || text UTF-8
 presence + length(title)    || title UTF-8 when present
 length(source_type)         || source_type UTF-8
