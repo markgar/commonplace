@@ -1,0 +1,24 @@
+[
+  {
+    "repository": "Qdrant/all-MiniLM-L6-v2-onnx",
+    "revision": "8f518e882455312b086101e60691f5e6e2f05c3c",
+    "files": [
+      ["model.onnx", "sha256", "bbd7b466f6d58e646fdc2bd5fd67b2f5e93c0b687011bd4548c420f7bd46f0c5"],
+      ["config.json", "git-blob-sha1", "56c8c186de9040d4fea8daac2ca110f9d412bf04"],
+      ["special_tokens_map.json", "git-blob-sha1", "9bbecc17cabbcbd3112c14d6982b51403b264bfa"],
+      ["tokenizer.json", "git-blob-sha1", "20cb6e457867e03c181180a296809275d3e40a7d"],
+      ["tokenizer_config.json", "git-blob-sha1", "954add25cc0792a2226b11d8ed5c9c39578084f0"]
+    ]
+  },
+  {
+    "repository": "jinaai/jina-reranker-v1-turbo-en",
+    "revision": "b8c14f4e723d9e0aab4732a7b7b93741eeeb77c2",
+    "files": [
+      ["onnx/model.onnx", "sha256", "c1296c66c119de645fa9cdee536d8637740efe85224cfa270281e50f213aa565"],
+      ["config.json", "git-blob-sha1", "1febe623f0d5566bf1dd91fb0641a29e122ee6e3"],
+      ["special_tokens_map.json", "git-blob-sha1", "d5698132694f4f1bcff08fa7d937b1701812598e"],
+      ["tokenizer.json", "git-blob-sha1", "61287c716716abd7a3096ff2f74a1de6e20d589b"],
+      ["tokenizer_config.json", "git-blob-sha1", "742b5d2b49f1a9222693ca4295f3226716f2f2bc"]
+    ]
+  }
+]

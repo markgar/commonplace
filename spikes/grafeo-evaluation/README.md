@@ -1,13 +1,23 @@
 # Grafeo evaluation spike
 
+**Historical only.** Stock Oxigraph is the adopted direction; this harness and
+its patched `resolution/` experiment are not production backends. Preserve their
+evidence, but use the [Oxigraph spike](../oxigraph-evaluation/README.md) and
+[owning specifications](../../docs/specification/README.md) for current work.
+
 This disposable harness evaluates Grafeo as a cross-platform replacement for
 LadybugDB. It tests the Commonplace graph shape, Cypher queries, persistence,
 read-only enforcement, and query deadlines.
 
 It intentionally reports unsupported requirements instead of hiding them.
-Grafeo 0.5.43 exposes query timeouts but no public external interruption or
-cancellation handle, so the result cannot be a full pass under the current
-Commonplace graph contract.
+The P2 `preflight` mode proves the selected role/deadline/publication behavior
+and reproduces bounded-materialization and semantic-value-tag blockers. The
+durable version carrier still needs an approved representation decision.
+Current CLI cancellation is process termination, not an external engine handle.
+
+The isolated [`resolution/` follow-up](resolution/README.md) demonstrates local
+engine changes for the three gaps and compares two version carriers. Its passing
+prototype probes do **not** change the unpatched gate or approve a fork/format.
 
 The canonical findings and platform evidence are recorded in
 [the Grafeo evaluation report](../../docs/spikes/grafeo-evaluation.md).
@@ -15,14 +25,21 @@ The canonical findings and platform evidence are recorded in
 ## macOS or Linux
 
 ```sh
-cargo run --manifest-path spikes/grafeo-evaluation/Cargo.toml --release
+COMMONPLACE_GRAFEO_DATA_DIR="$(mktemp -d /tmp/commonplace-graph-p2.XXXXXX)" \
+  cargo run --manifest-path spikes/grafeo-evaluation/Cargo.toml \
+  --release --locked --offline -- preflight
 ```
+
+The JSON `gate: blocked` is intentional even when diagnostics exit zero.
+`spikes/rust-packaging` runs this exact source in the combined executable.
+The old no-argument mode remains historical platform-probe evidence.
+New P2 execution is verified only on macOS arm64.
 
 ## Windows PowerShell
 
-Download and extract the appropriate Windows artifact produced by the manual
-`Grafeo platform spike` GitHub Actions workflow. No Rust toolchain is required
-on the test machine. From the extracted directory:
+Historical Windows artifacts included the following verifier. Do not dispatch
+or enable GitHub Actions; current validation policy is local-only. No new Windows
+run is claimed by P2. From an already available extracted historical artifact:
 
 ```powershell
 .\verify-windows.ps1

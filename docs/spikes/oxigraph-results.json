@@ -1,0 +1,677 @@
+{
+  "evidence_scope": "local macOS arm64 baseline; absolute worktree paths normalized",
+  "binary_sha256": "39aebca7ecb5ef334576109c96b26f9f9d01fc1a01b00c64ad6bb297eb3f4e02",
+  "baseline": {
+    "inference": {
+      "artifact_hashes_verified": true,
+      "cache": "${WORKTREE}/spikes/oxigraph-evaluation/target/relocation.3Q8rad/relocated/models",
+      "dimensions": 384,
+      "embedding_batches": [
+        2,
+        1
+      ],
+      "embedding_revision": "8f518e882455312b086101e60691f5e6e2f05c3c",
+      "network_client_compiled": false,
+      "norms": [
+        0.9999997019767761,
+        0.9999998807907104,
+        1.0000003576278687
+      ],
+      "repeat_calls_same_sessions": true,
+      "reranker_batch": 2,
+      "reranker_revision": "b8c14f4e723d9e0aab4732a7b7b93741eeeb77c2",
+      "reranker_top_index": 0,
+      "reranker_top_score": -0.25560659170150757,
+      "sqlite": {
+        "dimension_rejection": true,
+        "dimensions": 384,
+        "fts_passage_id": 2,
+        "nearest_passage_id": 1,
+        "sqlite": "3.50.2",
+        "sqlite_vec": "v0.1.6",
+        "status": "pass",
+        "transaction_rollback_and_commit": true
+      },
+      "status": "pass"
+    },
+    "oxigraph": {
+      "process_termination": {
+        "publication_lock_released": true,
+        "status": "signal: 2 (SIGINT)",
+        "terminated_pid": 31185
+      },
+      "projection": {
+        "active_only": true,
+        "evidence": {
+          "columns": [
+            "k",
+            "subject",
+            "object",
+            "passage",
+            "revision",
+            "document",
+            "start",
+            "end",
+            "quote"
+          ],
+          "consumed": 3,
+          "kind": "select",
+          "rows": [
+            [
+              {
+                "type": "uri",
+                "value": "urn:commonplace:knowledge:3"
+              },
+              {
+                "type": "uri",
+                "value": "urn:commonplace:entity:1"
+              },
+              {
+                "type": "uri",
+                "value": "urn:commonplace:entity:2"
+              },
+              {
+                "type": "uri",
+                "value": "urn:commonplace:passage:1"
+              },
+              {
+                "type": "uri",
+                "value": "urn:commonplace:revision:1"
+              },
+              {
+                "type": "uri",
+                "value": "urn:commonplace:doc:1"
+              },
+              {
+                "datatype": "http://www.w3.org/2001/XMLSchema#integer",
+                "language": null,
+                "type": "literal",
+                "value": "0"
+              },
+              {
+                "datatype": "http://www.w3.org/2001/XMLSchema#integer",
+                "language": null,
+                "type": "literal",
+                "value": "5"
+              },
+              {
+                "datatype": "http://www.w3.org/2001/XMLSchema#string",
+                "language": null,
+                "type": "literal",
+                "value": "café"
+              }
+            ],
+            [
+              {
+                "type": "uri",
+                "value": "urn:commonplace:knowledge:3"
+              },
+              {
+                "type": "uri",
+                "value": "urn:commonplace:entity:1"
+              },
+              {
+                "type": "uri",
+                "value": "urn:commonplace:entity:2"
+              },
+              {
+                "type": "uri",
+                "value": "urn:commonplace:passage:2"
+              },
+              {
+                "type": "uri",
+                "value": "urn:commonplace:revision:1"
+              },
+              {
+                "type": "uri",
+                "value": "urn:commonplace:doc:1"
+              },
+              {
+                "datatype": "http://www.w3.org/2001/XMLSchema#integer",
+                "language": null,
+                "type": "literal",
+                "value": "6"
+              },
+              {
+                "datatype": "http://www.w3.org/2001/XMLSchema#integer",
+                "language": null,
+                "type": "literal",
+                "value": "20"
+              },
+              {
+                "datatype": "http://www.w3.org/2001/XMLSchema#string",
+                "language": null,
+                "type": "literal",
+                "value": "supports Atlas"
+              }
+            ],
+            [
+              {
+                "type": "uri",
+                "value": "urn:commonplace:knowledge:4"
+              },
+              {
+                "type": "uri",
+                "value": "urn:commonplace:entity:1"
+              },
+              {
+                "type": "uri",
+                "value": "urn:commonplace:entity:2"
+              },
+              {
+                "type": "uri",
+                "value": "urn:commonplace:passage:1"
+              },
+              {
+                "type": "uri",
+                "value": "urn:commonplace:revision:1"
+              },
+              {
+                "type": "uri",
+                "value": "urn:commonplace:doc:1"
+              },
+              {
+                "datatype": "http://www.w3.org/2001/XMLSchema#integer",
+                "language": null,
+                "type": "literal",
+                "value": "0"
+              },
+              {
+                "datatype": "http://www.w3.org/2001/XMLSchema#integer",
+                "language": null,
+                "type": "literal",
+                "value": "5"
+              },
+              {
+                "datatype": "http://www.w3.org/2001/XMLSchema#string",
+                "language": null,
+                "type": "literal",
+                "value": "café"
+              }
+            ]
+          ],
+          "truncated": false
+        },
+        "evidence_query": "SELECT ?k ?subject ?object ?passage ?revision ?document ?start ?end ?quote WHERE {\n    ?k c:kind 'fact'; c:predicate <urn:commonplace:predicate:1>; c:subject ?subject; c:object ?object; c:evidence ?passage .\n    ?membership c:subject ?subject; c:entity_type <urn:commonplace:type:1> .\n    ?passage c:revision ?revision; c:start_byte ?start; c:end_byte ?end; c:text ?quote .\n    ?revision c:document ?document .\n} ORDER BY ?k ?passage",
+        "literals": {
+          "columns": [
+            "k",
+            "v"
+          ],
+          "consumed": 5,
+          "kind": "select",
+          "rows": [
+            [
+              {
+                "type": "uri",
+                "value": "urn:commonplace:knowledge:5"
+              },
+              {
+                "datatype": "http://www.w3.org/2001/XMLSchema#integer",
+                "language": null,
+                "type": "literal",
+                "value": "-9223372036854775808"
+              }
+            ],
+            [
+              {
+                "type": "uri",
+                "value": "urn:commonplace:knowledge:6"
+              },
+              {
+                "datatype": "http://www.w3.org/2001/XMLSchema#integer",
+                "language": null,
+                "type": "literal",
+                "value": "9223372036854775807"
+              }
+            ],
+            [
+              {
+                "type": "uri",
+                "value": "urn:commonplace:knowledge:7"
+              },
+              {
+                "datatype": "http://www.w3.org/2001/XMLSchema#boolean",
+                "language": null,
+                "type": "literal",
+                "value": "true"
+              }
+            ],
+            [
+              {
+                "type": "uri",
+                "value": "urn:commonplace:knowledge:8"
+              },
+              {
+                "datatype": "http://www.w3.org/2001/XMLSchema#dateTime",
+                "language": null,
+                "type": "literal",
+                "value": "2026-09-28T00:00:00Z"
+              }
+            ],
+            [
+              {
+                "type": "uri",
+                "value": "urn:commonplace:knowledge:9"
+              },
+              {
+                "datatype": "http://www.w3.org/2001/XMLSchema#string",
+                "language": null,
+                "type": "literal",
+                "value": "café"
+              }
+            ]
+          ],
+          "truncated": false
+        },
+        "quads": 67,
+        "version": 2
+      },
+      "publication": {
+        "commit_failure": "FOREIGN KEY constraint failed",
+        "corrupt_candidate": "rejected",
+        "crashes": [
+          {
+            "phase": "crash-before",
+            "read": "old_complete",
+            "sqlite_version": 1
+          },
+          {
+            "phase": "crash-after",
+            "read": "rejected",
+            "sqlite_version": 1
+          },
+          {
+            "phase": "crash-between",
+            "read": "rejected",
+            "sqlite_version": 1
+          }
+        ],
+        "empty_metadata_only": "pass",
+        "explicit_rebuild": "pass",
+        "iterator_outlives_store": "proved; drop iterator before lease release",
+        "native_writer_lock_error": "IO error: While lock file: ${WORKTREE}/spikes/oxigraph-evaluation/target/relocation.3Q8rad/data/publication/write-lock/LOCK: Resource temporarily unavailable",
+        "publisher_exclusion": "pass",
+        "restore_previous": "pass",
+        "successful_withdrawal": "pass",
+        "two_process_readers": "pass"
+      },
+      "queries": {
+        "ask": {
+          "boolean": true,
+          "kind": "ask"
+        },
+        "bare_minimum_expression": {
+          "columns": [
+            "minimum"
+          ],
+          "consumed": 1,
+          "kind": "select",
+          "rows": [
+            [
+              null
+            ]
+          ],
+          "truncated": false
+        },
+        "cancellation": [
+          {
+            "elapsed_ms": 299.19429199999996,
+            "error": "The SPARQL operation has been cancelled",
+            "query": "SELECT (COUNT(*) AS ?n) WHERE {\n        ?a <urn:probe:n> ?x . ?b <urn:probe:n> ?y . ?c <urn:probe:n> ?z .\n        FILTER(?x + ?y + ?z < 0)\n    }"
+          },
+          {
+            "elapsed_ms": 283.380334,
+            "error": "The SPARQL operation has been cancelled",
+            "query": "SELECT ?x WHERE { ?a <urn:probe:n> ?x . ?b <urn:probe:n> ?y . ?c <urn:probe:n> ?z . FILTER(?x + ?y + ?z < 0) }"
+          }
+        ],
+        "construct": {
+          "consumed": 3,
+          "kind": "graph",
+          "triples": [
+            {
+              "object": {
+                "datatype": "http://www.w3.org/2001/XMLSchema#integer",
+                "language": null,
+                "type": "literal",
+                "value": "0"
+              },
+              "predicate": {
+                "type": "uri",
+                "value": "urn:probe:copy"
+              },
+              "subject": {
+                "type": "uri",
+                "value": "urn:probe:0"
+              }
+            },
+            {
+              "object": {
+                "datatype": "http://www.w3.org/2001/XMLSchema#integer",
+                "language": null,
+                "type": "literal",
+                "value": "1"
+              },
+              "predicate": {
+                "type": "uri",
+                "value": "urn:probe:copy"
+              },
+              "subject": {
+                "type": "uri",
+                "value": "urn:probe:1"
+              }
+            }
+          ],
+          "truncated": true
+        },
+        "fast_timer_join_ms": 0.11816600000000001,
+        "lazy_function_calls": {
+          "after_three_rows": 3,
+          "before_execute": 0
+        },
+        "optional_triple": {
+          "enabled": false,
+          "reason": "ordinary reification needs RDF 1.1 only"
+        },
+        "queries": [
+          {
+            "bounded": {
+              "columns": [
+                "s",
+                "x"
+              ],
+              "consumed": 3,
+              "kind": "select",
+              "rows": [
+                [
+                  {
+                    "type": "uri",
+                    "value": "urn:probe:0"
+                  },
+                  {
+                    "datatype": "http://www.w3.org/2001/XMLSchema#integer",
+                    "language": null,
+                    "type": "literal",
+                    "value": "0"
+                  }
+                ],
+                [
+                  {
+                    "type": "uri",
+                    "value": "urn:probe:1"
+                  },
+                  {
+                    "datatype": "http://www.w3.org/2001/XMLSchema#integer",
+                    "language": null,
+                    "type": "literal",
+                    "value": "1"
+                  }
+                ]
+              ],
+              "truncated": true
+            },
+            "full_count": 2000,
+            "query": "SELECT ?s ?x WHERE { ?s <urn:probe:n> ?x }"
+          },
+          {
+            "bounded": {
+              "columns": [
+                "x"
+              ],
+              "consumed": 3,
+              "kind": "select",
+              "rows": [
+                [
+                  {
+                    "datatype": "http://www.w3.org/2001/XMLSchema#integer",
+                    "language": null,
+                    "type": "literal",
+                    "value": "1999"
+                  }
+                ],
+                [
+                  {
+                    "datatype": "http://www.w3.org/2001/XMLSchema#integer",
+                    "language": null,
+                    "type": "literal",
+                    "value": "1998"
+                  }
+                ]
+              ],
+              "truncated": true
+            },
+            "full_count": 2000,
+            "query": "SELECT ?x WHERE { ?s <urn:probe:n> ?x } ORDER BY DESC(?x)"
+          },
+          {
+            "bounded": {
+              "columns": [
+                "x"
+              ],
+              "consumed": 3,
+              "kind": "select",
+              "rows": [
+                [
+                  {
+                    "datatype": "http://www.w3.org/2001/XMLSchema#integer",
+                    "language": null,
+                    "type": "literal",
+                    "value": "1"
+                  }
+                ],
+                [
+                  {
+                    "datatype": "http://www.w3.org/2001/XMLSchema#integer",
+                    "language": null,
+                    "type": "literal",
+                    "value": "2"
+                  }
+                ]
+              ],
+              "truncated": true
+            },
+            "full_count": 4,
+            "query": "SELECT DISTINCT ?x WHERE { VALUES ?x { 2 1 2 3 4 } } ORDER BY ?x"
+          },
+          {
+            "bounded": {
+              "columns": [
+                "n"
+              ],
+              "consumed": 1,
+              "kind": "select",
+              "rows": [
+                [
+                  {
+                    "datatype": "http://www.w3.org/2001/XMLSchema#integer",
+                    "language": null,
+                    "type": "literal",
+                    "value": "10"
+                  }
+                ]
+              ],
+              "truncated": false
+            },
+            "full_count": 1,
+            "query": "SELECT (SUM(?x) AS ?n) WHERE { VALUES ?x { 1 2 3 4 } }"
+          },
+          {
+            "bounded": {
+              "columns": [
+                "x"
+              ],
+              "consumed": 3,
+              "kind": "select",
+              "rows": [
+                [
+                  {
+                    "datatype": "http://www.w3.org/2001/XMLSchema#integer",
+                    "language": null,
+                    "type": "literal",
+                    "value": "1"
+                  }
+                ],
+                [
+                  {
+                    "datatype": "http://www.w3.org/2001/XMLSchema#integer",
+                    "language": null,
+                    "type": "literal",
+                    "value": "2"
+                  }
+                ]
+              ],
+              "truncated": true
+            },
+            "full_count": 4,
+            "query": "SELECT ?x WHERE { { VALUES ?x { 1 2 } } UNION { VALUES ?x { 3 4 } } }"
+          },
+          {
+            "bounded": {
+              "columns": [
+                "x"
+              ],
+              "consumed": 3,
+              "kind": "select",
+              "rows": [
+                [
+                  {
+                    "datatype": "http://www.w3.org/2001/XMLSchema#integer",
+                    "language": null,
+                    "type": "literal",
+                    "value": "2"
+                  }
+                ],
+                [
+                  {
+                    "datatype": "http://www.w3.org/2001/XMLSchema#integer",
+                    "language": null,
+                    "type": "literal",
+                    "value": "3"
+                  }
+                ]
+              ],
+              "truncated": true
+            },
+            "full_count": 5,
+            "query": "SELECT ?x WHERE { ?s <urn:probe:n> ?x } ORDER BY ?x OFFSET 2 LIMIT 5"
+          }
+        ],
+        "read_only_insert_error": "Transaction are only possible on read-write instances",
+        "read_only_update_errors": [
+          "Transaction are only possible on read-write instances",
+          "Transaction are only possible on read-write instances",
+          "Transaction are only possible on read-write instances",
+          "Transaction are only possible on read-write instances"
+        ],
+        "service_error": "The service <http://127.0.0.1:9/sparql> is not supported",
+        "service_silent": {
+          "columns": [
+            "o",
+            "p",
+            "s"
+          ],
+          "consumed": 1,
+          "kind": "select",
+          "rows": [
+            [
+              null,
+              null,
+              null
+            ]
+          ],
+          "truncated": false
+        },
+        "typed": {
+          "columns": [
+            "uri",
+            "blank",
+            "lo",
+            "hi",
+            "bool",
+            "text",
+            "date",
+            "missing"
+          ],
+          "consumed": 1,
+          "kind": "select",
+          "rows": [
+            [
+              {
+                "type": "uri",
+                "value": "urn:commonplace:entity:1"
+              },
+              {
+                "type": "bnode",
+                "value": "local"
+              },
+              {
+                "datatype": "http://www.w3.org/2001/XMLSchema#integer",
+                "language": null,
+                "type": "literal",
+                "value": "-9223372036854775808"
+              },
+              {
+                "datatype": "http://www.w3.org/2001/XMLSchema#integer",
+                "language": null,
+                "type": "literal",
+                "value": "9223372036854775807"
+              },
+              {
+                "datatype": "http://www.w3.org/2001/XMLSchema#boolean",
+                "language": null,
+                "type": "literal",
+                "value": "true"
+              },
+              {
+                "datatype": "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString",
+                "language": "fr",
+                "type": "literal",
+                "value": "café"
+              },
+              {
+                "datatype": "http://www.w3.org/2001/XMLSchema#dateTime",
+                "language": null,
+                "type": "literal",
+                "value": "2026-09-28T00:00:00Z"
+              },
+              null
+            ]
+          ],
+          "truncated": false
+        },
+        "typed_bound_i64_extrema": "pass"
+      }
+    }
+  },
+  "optional_rdf12": {
+    "columns": [
+      "triple"
+    ],
+    "consumed": 1,
+    "kind": "select",
+    "rows": [
+      [
+        {
+          "object": {
+            "datatype": "http://www.w3.org/2001/XMLSchema#integer",
+            "direction": null,
+            "language": null,
+            "type": "literal",
+            "value": "1"
+          },
+          "predicate": {
+            "type": "uri",
+            "value": "urn:p"
+          },
+          "subject": {
+            "type": "uri",
+            "value": "urn:s"
+          },
+          "type": "triple"
+        }
+      ]
+    ],
+    "truncated": false
+  }
+}
