@@ -5,6 +5,8 @@ use anyhow::{Context, Result, bail};
 use grafeo::{Config, GrafeoDB, Role};
 use serde_json::json;
 
+mod preflight;
+
 fn main() -> Result<()> {
     let root = match std::env::var_os("COMMONPLACE_GRAFEO_DATA_DIR") {
         Some(path) => path.into(),
@@ -14,6 +16,13 @@ fn main() -> Result<()> {
             .join("data"),
     };
     std::fs::create_dir_all(&root)?;
+    if std::env::args().nth(1).as_deref() == Some("preflight") {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&preflight::probe(&root)?)?
+        );
+        return Ok(());
+    }
 
     let graph_path = root.join("commonplace.grafeo");
     remove_graph(&graph_path)?;
