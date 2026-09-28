@@ -29,6 +29,7 @@ pub fn initialize(requested_root: &Path) -> Result<InitResult> {
 
         StoreConfig::validate(&root)?;
         SqliteDatabase::validate(&database_path)?;
+        drop(graph::GraphRuntime::open(&root)?);
 
         return Ok(InitResult {
             path: root,
@@ -50,15 +51,14 @@ pub fn initialize(requested_root: &Path) -> Result<InitResult> {
         .tempdir_in(parent)?;
     let staging_root = staging.path();
     let staging_database = staging_root.join("commonplace.sqlite3");
-    let staging_graph = staging_root.join("graph/current.grafeo");
     let staging_config = staging_root.join("config.json");
 
     SqliteDatabase::initialize(&staging_database)?;
-    graph::grafeo::initialize(&staging_graph)?;
     std::fs::write(
         &staging_config,
         serde_json::to_vec_pretty(&StoreConfig::expected())?,
     )?;
+    graph::initialize(staging_root)?;
 
     let staging_path = staging.keep();
     if let Err(error) = std::fs::rename(&staging_path, &root) {
@@ -99,7 +99,7 @@ mod tests {
         let created = initialize(&root).expect("initialize store");
         assert!(created.created);
         assert!(root.join("commonplace.sqlite3").is_file());
-        assert!(root.join("graph/current.grafeo").exists());
+        assert!(root.join("graph/current").is_dir());
         assert!(root.join("config.json").is_file());
 
         let reopened = initialize(&root).expect("validate existing store");

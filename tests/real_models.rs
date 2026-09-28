@@ -37,6 +37,11 @@ fn real_model_ingest_get_offline() {
     );
 
     let store = Store::new();
+    assert_eq!(
+        store.success(&["init"])["result"]["format"],
+        "commonplace-store/2"
+    );
+    let graph_before_ingest = store.graph_files();
     let notes = store.directory.path().join("notes");
     std::fs::create_dir_all(notes.join("nested")).unwrap();
     let a = notes.join("a.md");
@@ -202,8 +207,95 @@ fn real_model_ingest_get_offline() {
     assert!(default_cache.stderr.is_empty());
     let default_result: Value = serde_json::from_slice(&default_cache.stdout).unwrap();
     assert_eq!(default_result["result"]["summary"]["updated"], 1);
+    drop(session);
+    assert_eq!(store.graph_files(), graph_before_ingest);
+    assert_eq!(
+        execute(&["graph", "rebuild"])["result"],
+        json!({"knowledge_version":0})
+    );
+    assert_eq!(
+        execute(&["graph", "query", "SELECT ?s WHERE { ?s ?p ?o }"])["result"]["rows"],
+        json!([])
+    );
+
+    // P5b owns authoring commands; cite real ingested passages via a committed fixture.
+    store.apply(&json!({"entity_types":[{"name":"person"}]}), false);
+    let passages = [
+        added["result"]["items"][0]["passage_ids"][0]
+            .as_str()
+            .unwrap(),
+        updated["result"]["items"][0]["passage_ids"][0]
+            .as_str()
+            .unwrap(),
+    ];
+    let mut db = store.database();
+    db.execute_batch("PRAGMA foreign_keys=ON").unwrap();
+    let tx = db.transaction().unwrap();
+    tx.execute_batch(
+        "INSERT INTO entities VALUES (1,'Ada','2026-01-01T00:00:00Z',NULL);
+         INSERT INTO knowledge_items VALUES
+             (1,'type_membership',1,'2026-01-01T00:00:00Z',NULL,NULL,NULL);
+         INSERT INTO entity_type_memberships VALUES (1,1,1);
+         UPDATE store_state SET knowledge_version=1;",
+    )
+    .unwrap();
+    for passage in passages {
+        tx.execute(
+            "INSERT INTO knowledge_item_evidence VALUES (1,?1)",
+            [passage
+                .strip_prefix("passage:")
+                .unwrap()
+                .parse::<i64>()
+                .unwrap()],
+        )
+        .unwrap();
+    }
+    tx.commit().unwrap();
+    drop(db);
+    store.failure(
+        &["graph", "query", "SELECT ?s WHERE { ?s ?p ?o }"],
+        "graph_unavailable",
+        1,
+    );
+    let citation_query = "PREFIX c: <urn:commonplace:property:>
+        SELECT ?p ?r ?d ?text ?start ?end WHERE {
+            <urn:commonplace:knowledge:1> c:evidence ?p .
+            ?p c:revision ?r; c:text ?text; c:start_byte ?start; c:end_byte ?end .
+            ?r c:document ?d
+        } ORDER BY ?p";
+    assert_eq!(
+        execute(&["graph", "rebuild"])["result"],
+        json!({"knowledge_version":1})
+    );
+    let citations = execute(&["graph", "query", citation_query])["result"].clone();
+    assert_eq!(citations["rows"].as_array().unwrap().len(), 2);
+    for passage in passages {
+        let exact = execute(&["get", passage]);
+        let exact = &exact["result"];
+        let uri = format!("urn:commonplace:{passage}");
+        let row = citations["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row[0]["value"] == uri)
+            .unwrap();
+        assert_eq!(
+            row[1]["value"],
+            format!("urn:commonplace:{}", exact["revision_id"].as_str().unwrap())
+        );
+        assert_eq!(row[2]["value"], format!("urn:commonplace:{doc}"));
+        assert_eq!(row[3]["value"], exact["text"]);
+        assert_eq!(row[4]["value"], exact["start_byte"].to_string());
+        assert_eq!(row[5]["value"], exact["end_byte"].to_string());
+    }
+    execute(&["graph", "rebuild"]);
+    assert_eq!(
+        execute(&["graph", "query", citation_query])["result"],
+        citations
+    );
+    assert_eq!(execute(&["init"])["status"], "unchanged");
     println!(
-        "PASS pinned local model; multi-file public binary, unchanged/content/metadata revisions, exact UTF-8 get, current FTS/vector parity, strict override and default HF cache hits; cache={}",
+        "PASS pinned local model; v2 multi-file public binary, unchanged/content/metadata revisions, exact UTF-8 get, current FTS/vector parity, strict override and default HF cache hits, unchanged graph bytes during ingest, empty/membership rebuild and exact old/new citation parity; cache={}",
         cache.display()
     );
 }

@@ -8,9 +8,7 @@ use serde_json::json;
 
 #[test]
 fn incompatible_or_incomplete_stores_fail_before_mutation() {
-    for damage in [
-        "config", "format", "versions", "fts", "vector", "database", "graph",
-    ] {
+    for damage in ["config", "format", "versions", "fts", "vector", "database"] {
         let store = Store::new();
         match damage {
             "config" => {
@@ -43,7 +41,6 @@ fn incompatible_or_incomplete_stores_fail_before_mutation() {
                 .unwrap();
             }
             "database" => std::fs::remove_file(store.root.join("commonplace.sqlite3")).unwrap(),
-            "graph" => std::fs::remove_file(store.root.join("graph/current.grafeo")).unwrap(),
             _ => unreachable!(),
         }
         let before = store.files();

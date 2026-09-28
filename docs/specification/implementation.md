@@ -641,6 +641,13 @@ Decision ownership and deadlines:
 | Binary test fixtures and real-model test execution | P1 harness; P2 convention, P3 production model tests | Shared process fixtures and an explicit pinned-cache invocation with no silent skips |
 | Command-specific inputs, outputs, and errors | Each command's owning packet, reusing P1 conventions | Approved examples, executable validators, and CLI tests |
 
+P5a's approved operational defaults are 1000 retained rows (`--row-limit`, with
+zero allowed) and 5000 ms (`--timeout-ms`, positive) for cooperative evaluation
+cancellation. Product section 8 owns their CLI behavior; they do not add fields
+to the version-2 configuration. Acceptance covers zero/at/above row bounds,
+overflow rejection, native lazy consumption, execution/iteration cancellation,
+and prompt timer teardown.
+
 The adopted `commonplace-store/2` marker is not proof that every representation
 choice above has been finalized. P5a implements the approved replacement of
 version 1 described in persistence; it does not silently repurpose that marker.

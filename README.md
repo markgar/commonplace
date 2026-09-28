@@ -7,15 +7,19 @@ hybrid SQLite search, explicitly authored cited knowledge, and local graph
 queries.
 
 The Rust implementation supports store initialization, additive vocabulary,
-local-file ingestion, and exact document/revision/passage reads:
+local-file ingestion, exact document/revision/passage reads, and read-only RDF
+graph queries and rebuild:
 
 ```sh
 cargo run --bin commonplace -- --store .commonplace init
 ```
 
 The command creates the SQLite schema, FTS5 and sqlite-vec indexes, and the
-derived Grafeo storage location. It is safe to rerun against a compatible
-initialized store.
+derived stock Oxigraph 0.5.11/RocksDB database. New stores use
+`commonplace-store/2` and `commonplace-config/2`. It is safe to rerun against a
+compatible initialized store with a valid, version-matching graph. Version-1
+Grafeo stores and unknown layouts are rejected without migration, relabeling,
+or automatic repair; use a fresh directory for a new store.
 
 Create `schema.json` with the vocabulary you want to add:
 
@@ -40,7 +44,8 @@ cargo run --bin commonplace -- schema apply --describe --json
 ```
 
 JSON is the default output; `--json` explicitly requests the same format. The
-existing `init` response is unchanged. Schema operations use the same
+`init` response field names are unchanged; its format is `commonplace-store/2`.
+Schema and graph operations use the same
 `operation`, `contract_version`, `status`, and `result` envelope.
 
 Input collections may be omitted. Names match `[a-z][a-z0-9_]*`; terms may include
@@ -76,7 +81,77 @@ on stdout. Argument syntax errors use the standard CLI usage diagnostics.
 Checks and reads use consistent read-only SQLite snapshots and create no
 application-owned lock state; SQLite may maintain its own WAL/SHM sidecars.
 Descriptions never open the store. Vocabulary operations neither load inference
-nor open or rebuild Grafeo.
+nor open or rebuild Oxigraph, and remain available when derived graph state is
+missing or corrupt.
+
+## Graph queries and explicit rebuild
+
+```sh
+cargo run --bin commonplace -- graph schema --json
+cargo run --bin commonplace -- --store .commonplace graph query \
+  'SELECT ?knowledge WHERE { ?knowledge ?p ?o }' --row-limit 1000 --timeout-ms 5000
+cargo run --bin commonplace -- --store .commonplace graph query \
+  'SELECT ?version WHERE { GRAPH <urn:commonplace:metadata> { <urn:commonplace:store> <urn:commonplace:property:knowledge_version> ?version } }'
+cargo run --bin commonplace -- --store .commonplace graph rebuild --json
+```
+
+`graph schema` describes the canonical RDF 1.1 mapping, ID namespaces, property
+datatypes, evidence fields, and SELECT examples without opening a store. Rebuild
+currently projects active type memberships, their referenced entities/types, and
+complete cited passage/revision/document fields from SQLite. There is no public
+authoring command yet. Active facts fail explicitly rather than being omitted;
+fact authoring/projection belongs to P6. Unused vocabulary and bare entities do
+not appear in the default graph. Empty stores retain version-zero metadata in
+the query-visible reserved named graph `urn:commonplace:metadata`.
+
+Queries accept a positional SPARQL SELECT through the native parser and a native
+read-only store. Update, ASK, CONSTRUCT, and DESCRIBE return `invalid_input`.
+HTTP and remote service handlers are disabled. `SERVICE` fails explicitly;
+`SERVICE SILENT` preserves native error suppression without fetching data.
+`FROM` clauses select local stored graphs only. No inference loads for graph
+commands.
+
+The result has exactly `kind`, `columns`, `rows`, and `truncated`:
+
+```json
+{"kind":"select","columns":["knowledge"],"rows":[],"truncated":false}
+```
+
+Columns preserve native projection order, and rows contain aligned RDF terms or
+`null` for unbound variables. IRIs use `{"type":"uri","value":"urn:commonplace:knowledge:3"}`;
+blank nodes use `{"type":"bnode","value":"label"}`. Literals use
+`{"type":"literal","value":"42","datatype":"http://www.w3.org/2001/XMLSchema#integer","language":null}`.
+Lexical values remain strings; language tags and datatypes are retained.
+Native expression errors remain unbound: for the exact minimum i64, use
+`"-9223372036854775808"^^<http://www.w3.org/2001/XMLSchema#integer>` rather than
+the stock engine's bare numeric expression.
+
+`--row-limit` defaults to **1000**. Zero is valid and returns no rows while probing
+one solution to determine truncation. The lazy iterator consumes at most
+`row_limit + 1` solutions, retaining at most `row_limit` rows without rewriting
+the query. This does **not** bound internal sort/join/aggregate memory or individual
+values. Use `ORDER BY` when ordering matters.
+
+`--timeout-ms` defaults to **5000** and must be positive. An operation-scoped timer
+requests native cancellation during execution and result iteration; it wakes
+and joins promptly on completion, error, or truncation. Cancellation is
+cooperative and may overshoot: this is not a hard wall-clock or memory limit,
+and parsing is not preemptible. Budget expiry returns `limit_exceeded` (exit 2)
+without partial results. Ctrl+C terminates the synchronous process.
+
+Graph reads hold a shared `graph/publication.lock` lease through closing both
+results and native storage, and compare metadata with a consistent SQLite
+snapshot under the same lease. Missing/corrupt graphs or invalid/mismatched
+metadata return `graph_unavailable` (exit 1), never a fallback or automatic repair.
+Rebuild takes the writer and exclusive publication locks (two-second bounded
+wait), reads committed SQLite, builds in bounded batches, flushes/closes/verifies
+`graph/candidate`, and publishes via `graph/previous`. It returns
+`{"knowledge_version":0}` for an empty store without incrementing that version.
+Build/activation failure preserves the prior current state; restoration and
+post-publication cleanup failures are explicit. Rebuild can recover missing
+current state and removes only the known `candidate`/`previous` scratch paths,
+not arbitrary files or authoritative SQLite state. The publication lock itself
+is never renamed or removed.
 
 ## Ingestion and exact reads
 
@@ -185,6 +260,15 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-targets --all-features
 ```
 
+Use `-j2` for the first native RocksDB build on memory-constrained hosts.
+The graph integration is exercised locally on macOS arm64. Independent
+clean-target and other supported-platform execution remain P10 release gates.
+There is also a concrete Windows portability gap, not just missing test evidence:
+directory publication currently uses `File::open(directory).sync_all()`.
+Windows-compatible directory synchronization for initialization, activation,
+restoration, and cleanup still needs implementation/verification in P10 before
+release. Sync errors remain explicit; there is no no-op or fallback.
+
 Ordinary tests use deterministic substitutes only for expensive inference; they
 use real SQLite, FTS5, and sqlite-vec and never acquire model weights. The separate
 real-model integration target is ignored by default. Explicit invocation requires
@@ -198,7 +282,10 @@ COMMONPLACE_MODEL_CACHE=/absolute/path/to/prepared/pinned-models \
 
 This target runs the public binary over multiple files, repeats ingestion, makes
 metadata and content revisions, reads exact old/new evidence, and checks current
-FTS/vector IDs. It also verifies offline hits through the standard `HF_HOME`
+FTS/vector IDs on a version-2 store. It verifies ingestion leaves graph files
+unchanged, then rebuilds empty and fixture-backed membership graphs and compares
+their old/new passage citations with exact reads. It also verifies offline hits
+through the standard `HF_HOME`
 cache. On macOS, prefix `cargo` with
 `sandbox-exec -p '(version 1)(allow default)(deny network*)'` to enforce network
 denial for the test and its binary children. This is local runtime evidence,
@@ -220,7 +307,3 @@ The standalone design specification is organized under
 - [Software architecture](docs/specification/architecture.md)
 - [Persistence design](docs/specification/persistence.md)
 - [Implementation and acceptance](docs/specification/implementation.md)
-
-The specifications now select stock Oxigraph and SPARQL SELECT. Production
-replacement, including the version-2 store layout, is assigned to P5a; the
-initialization behavior described above still uses Grafeo until that work lands.

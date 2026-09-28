@@ -446,6 +446,14 @@ CONSTRUCT, and DESCRIBE query forms are rejected as `invalid_input` in the first
 release. This is a product boundary, not an engine limitation. No mutation API is
 exposed and read-only enforcement is not based on string filtering.
 
+The query text is a positional argument. `--row-limit` defaults to 1000 and
+permits zero: a zero limit retains no rows and consumes at most one sentinel
+solution to distinguish empty from truncated. `--timeout-ms` defaults to 5000
+and must be positive. These are operational options, not stored representation
+fields; the initialized configuration retains the exact shape in persistence
+section 13.3. Limits must be representable without arithmetic overflow and must
+not cause eager result-capacity allocation.
+
 Queries are local: HTTP support and remote service handlers are disabled.
 `SERVICE` cannot retrieve remote data. `SERVICE SILENT` retains SPARQL's error
 suppression semantics without enabling network access. Dataset clauses select
@@ -568,6 +576,13 @@ and metadata graph, canonical ID mapping, property names, datatypes, evidence
 fields, and example read-only SPARQL SELECT patterns. Standard
 `--help`, these two schema commands, and generated input descriptions replace a
 general `commonplace capabilities` command.
+
+`graph schema` is a static description and does not open the store. While P5a
+ships membership/evidence projection without authoring commands, it identifies
+facts as unsupported rather than promising successful fact projection. Rebuild
+rejects active unsupported facts instead of silently publishing an incomplete
+graph. The `graph rebuild` success payload is `{"knowledge_version":N}`, inside
+the common envelope; `N` is the unchanged committed SQLite version.
 
 Complex JSON boundaries describe themselves:
 

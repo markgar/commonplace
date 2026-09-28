@@ -8,7 +8,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 
 use crate::Result;
-use crate::app::{get, init, schema};
+use crate::app::{get, graph, init, schema};
 
 use self::output::{CommandResponse, CommandResult, ErrorResponse};
 
@@ -30,6 +30,11 @@ struct Cli {
 enum Command {
     /// Create or validate a knowledge base.
     Init,
+    /// Inspect, query, or explicitly rebuild the derived RDF graph.
+    Graph {
+        #[command(subcommand)]
+        command: GraphCommand,
+    },
     /// Ingest local UTF-8 files with independently atomic publication.
     Ingest(ingest::IngestArgs),
     /// Read a complete document, revision, or exact passage.
@@ -39,6 +44,24 @@ enum Command {
         #[command(subcommand)]
         command: SchemaCommand,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum GraphCommand {
+    /// Describe the RDF mapping without opening a store.
+    Schema,
+    /// Run a local, native read-only SPARQL SELECT.
+    Query {
+        query: String,
+        /// Maximum retained rows (zero allowed); consumes at most one extra solution.
+        #[arg(long, default_value_t = 1000)]
+        row_limit: usize,
+        /// Cooperative evaluation budget in milliseconds, not a hard timeout.
+        #[arg(long, default_value_t = 5000)]
+        timeout_ms: u64,
+    },
+    /// Rebuild from committed SQLite, repairing derived state only.
+    Rebuild,
 }
 
 #[derive(Debug, Subcommand)]
@@ -87,6 +110,34 @@ pub fn main() -> ExitCode {
 
 fn execute(cli: Cli) -> Result<CommandResponse> {
     match cli.command {
+        Command::Graph { command } => match command {
+            GraphCommand::Schema => Ok(CommandResponse::new(
+                "graph.schema",
+                "complete",
+                CommandResult::GraphSchema(crate::graph::schema::describe()),
+            )),
+            GraphCommand::Query {
+                query,
+                row_limit,
+                timeout_ms,
+            } => Ok(CommandResponse::new(
+                "graph.query",
+                "complete",
+                CommandResult::GraphQuery(graph::query(
+                    &cli.store,
+                    &query,
+                    crate::graph::QueryConfig {
+                        row_limit,
+                        timeout: std::time::Duration::from_millis(timeout_ms),
+                    },
+                )?),
+            )),
+            GraphCommand::Rebuild => Ok(CommandResponse::new(
+                "graph.rebuild",
+                "complete",
+                CommandResult::GraphRebuild(graph::rebuild(&cli.store)?),
+            )),
+        },
         Command::Ingest(args) => ingest::execute(&cli.store, args),
         Command::Get { id } => Ok(CommandResponse::new(
             "get",
@@ -144,6 +195,15 @@ fn execute(cli: Cli) -> Result<CommandResponse> {
 impl Command {
     const fn operation(&self) -> &'static str {
         match self {
+            Self::Graph {
+                command: GraphCommand::Schema,
+            } => "graph.schema",
+            Self::Graph {
+                command: GraphCommand::Query { .. },
+            } => "graph.query",
+            Self::Graph {
+                command: GraphCommand::Rebuild,
+            } => "graph.rebuild",
             Self::Init => "init",
             Self::Ingest(args) if args.describe => "ingest.describe",
             Self::Ingest(_) => "ingest",

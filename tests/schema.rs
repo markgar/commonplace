@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 #[test]
 fn apply_reopen_noop_and_endpoint_only_versioning() {
     let store = Store::new();
-    let graph = std::fs::read(store.root.join("graph/current.grafeo")).unwrap();
+    let graph = store.graph_files();
     let applied = store.apply(&Store::vocabulary(), false);
     assert_eq!(
         applied,
@@ -70,10 +70,7 @@ fn apply_reopen_noop_and_endpoint_only_versioning() {
         3
     );
     assert_eq!(third["result"]["predicates"][4]["introduced_version"], 3);
-    assert_eq!(
-        graph,
-        std::fs::read(store.root.join("graph/current.grafeo")).unwrap()
-    );
+    assert_eq!(graph, store.graph_files());
     let database = store.database();
     assert_eq!(
         database
