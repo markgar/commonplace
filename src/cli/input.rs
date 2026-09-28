@@ -13,13 +13,13 @@ pub struct Description {
     pub example: Value,
 }
 
-fn input_schema() -> schemars::Schema {
+pub(super) fn generated_schema<T: schemars::JsonSchema>() -> schemars::Schema {
     schemars::generate::SchemaSettings::draft2020_12()
         .into_generator()
-        .into_root_schema_for::<SchemaInput>()
+        .into_root_schema_for::<T>()
 }
 
-fn validate(value: &Value, schema: &schemars::Schema) -> Result<()> {
+pub(super) fn validate(value: &Value, schema: &schemars::Schema) -> Result<()> {
     let validator = jsonschema::validator_for(schema.as_value()).map_err(|error| {
         CommonplaceError::Storage(format!("invalid generated input schema: {error}"))
     })?;
@@ -29,7 +29,7 @@ fn validate(value: &Value, schema: &schemars::Schema) -> Result<()> {
 }
 
 pub fn describe() -> Result<Description> {
-    let input_schema = input_schema();
+    let input_schema = generated_schema::<SchemaInput>();
     let example = serde_json::json!({"entity_types": [{"name": "person"}]});
     validate(&example, &input_schema)?;
     Ok(Description {
@@ -55,7 +55,7 @@ fn parse(reader: impl Read, maximum_bytes: usize) -> Result<SchemaInput> {
     }
     let value: Value = serde_json::from_slice(&bytes)
         .map_err(|error| CommonplaceError::InvalidInput(error.to_string()))?;
-    validate(&value, &input_schema())?;
+    validate(&value, &generated_schema::<SchemaInput>())?;
     // Decode the original bytes so duplicate JSON fields are not silently collapsed.
     serde_json::from_slice(&bytes)
         .map_err(|error| CommonplaceError::InvalidInput(error.to_string()))

@@ -197,6 +197,18 @@ a fixed model and input.
 
 There are no provider registries or runtime profile selectors.
 
+P3 acquires only its immutable embedding artifacts through stock synchronous
+`hf-hub` 0.5.0 (`ureq` feature, defaults disabled), with an exact
+`Repo::with_revision`. The ordinary cache is `Cache::from_env`: `$HF_HOME/hub`
+or `~/.cache/huggingface/hub`. A verified cache hit makes no network probe;
+missing artifacts use the standard acquisition API without credentials. The
+optional `COMMONPLACE_MODEL_CACHE` override uses the P2 `<revision>/<filename>`
+layout and is strictly offline. Every file is hash-verified before FastEmbed's
+user-defined model constructor receives it. Corruption fails without replacement,
+and acquisition never receives source text or metadata. Explicit real-model
+tests require the prepared offline override; ordinary tests never download
+weights.
+
 ### 5.3 Graph engine
 
 `GraphRuntime` and its private Oxigraph projection/query modules form one direct

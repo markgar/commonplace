@@ -113,6 +113,22 @@ including empty content, CRLF line endings, byte-order marks, NUL characters,
 combining marks, and non-BMP characters. It rejects undecodable or binary input
 rather than normalizing it.
 
+For the P3 file forms, explicit symlinks are rejected and discovered symlinks are
+skipped. Scan globs are case-sensitive and relative to each input directory:
+`*` stays within a path component, `**` may span components, include patterns are
+ORed, and excludes take precedence. Filters apply to directory scans, not explicit
+files. Roots retain argument order; each root's bounded scan is sorted by path.
+Exceeding the document-enumeration limit rejects the command before publication.
+An input that disappears during reading fails as an item, never as an implicit
+deletion.
+
+File defaults are title equal to the filename, source type `file`, no source time,
+and empty metadata. `--title`, `--source-type`, `--occurred-at`, and `--metadata`
+override those fields for every document in that command. The metadata argument
+is a JSON object using persistence's canonical value set; timestamps normalize
+to UTC RFC 3339. These file overrides do not add streamed input or manifest
+support to P3.
+
 Other systems can normalize email, chat, web, PDF, or connector content into
 stdin or JSON Lines input. Format-specific acquisition does not create a
 separate storage or indexing pipeline. Each JSON Lines record is self-contained.
@@ -147,6 +163,17 @@ One command accepts one or many documents. It:
 
 Per-document outcomes are `added`, `updated`, `unchanged`, or `failed`.
 Aggregate status is `complete`, `partial`, or `failed`.
+
+The ingestion result is `{summary, items}` inside the common envelope.
+`summary` counts `added`, `updated`, `unchanged`, and `failed`. Each item has
+`input`, `source_key`, `status`, `document_id`, `revision_id`, `passage_ids`, and
+`error`. Successful items return canonical IDs and `error: null`; failed items
+return null document/revision IDs, an empty passage-ID array, and
+`error: {stage, code, message}`. An unresolved source key is null.
+An attempted batch emits this result on stdout even when partial or all-failed.
+Exit selection is deterministic: any runtime failure yields 1; otherwise any
+conflict yields 3; otherwise failed items yield 2; otherwise 0. Command-level
+validation errors use the common error envelope on stderr.
 
 A failed document cannot corrupt another document. Rerunning the same input
 converges without duplicate documents.
@@ -534,6 +561,14 @@ separate noun-specific read command.
 and does not silently truncate authoritative state. Existing source-size and
 per-request write limits bound individual stored values; cumulative revision
 and entity histories may grow with use.
+
+P3 implements document, revision, and passage selectors. Its result has
+`kind: document | revision | passage` plus the complete record fields. A document
+includes all `revision_ids` in revision-number order and `current_revision_id`;
+a revision includes all `passage_ids` in ordinal order. A passage includes source
+key, revision number, ordinal, exact text and byte offsets, and the revision's
+title/type/time/metadata. Missing supported IDs yield `not_found`. Entity and
+knowledge selectors remain explicitly unsupported until their owning packets.
 
 `commonplace schema show` returns the complete user vocabulary from SQLite.
 `commonplace graph schema` returns the stable RDF mapping, reserved namespaces

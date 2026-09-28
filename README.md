@@ -6,8 +6,9 @@ Commonplace is a lean personal knowledge tool for batch document ingestion,
 hybrid SQLite search, explicitly authored cited knowledge, and local graph
 queries.
 
-The Rust implementation supports store initialization, additive vocabulary, and
-read-only RDF graph queries and rebuild:
+The Rust implementation supports store initialization, additive vocabulary,
+local-file ingestion, exact document/revision/passage reads, and read-only RDF
+graph queries and rebuild:
 
 ```sh
 cargo run --bin commonplace -- --store .commonplace init
@@ -152,9 +153,106 @@ current state and removes only the known `candidate`/`previous` scratch paths,
 not arbitrary files or authoritative SQLite state. The publication lock itself
 is never renamed or removed.
 
-## Development
+## Ingestion and exact reads
 
-Development checks:
+```sh
+cargo run --bin commonplace -- --store .commonplace ingest notes.md other.txt
+cargo run --bin commonplace -- --store .commonplace ingest ./notes --recursive \
+  --include '**/*.md' --exclude 'archive/**'
+cargo run --bin commonplace -- --store .commonplace ingest notes.md \
+  --title 'Planning notes' --source-type note \
+  --occurred-at '2026-09-28T09:00:00-05:00' --metadata '{"project":"commonplace"}'
+cargo run --bin commonplace -- ingest --describe --json
+cargo run --bin commonplace -- --store .commonplace get doc:1
+cargo run --bin commonplace -- --store .commonplace get revision:1
+cargo run --bin commonplace -- --store .commonplace get passage:1
+```
+
+Use the IDs returned by your own ingestion. Direct inputs accept regular UTF-8
+files. Directory scans select lowercase `.md` and `.txt` extensions; recursion
+is opt-in. Explicit symlinks fail, discovered symlinks are skipped. Include and
+exclude globs apply only to directory scans, match case-sensitive paths relative
+to each scan root, and use `/` separators (`*` does not cross a separator,
+`**` can). Includes are ORed; excludes win. Explicit roots retain argument order;
+matching files within each root are sorted by path after bounded enumeration.
+Enumeration holds paths, not file bodies, and exceeding the document bound
+rejects the command before any publication.
+
+The default source key is a canonical absolute file URI, identical for direct
+and scanned input. Moving a file gives it a new identity. The default title is
+its filename, source type is `file`, source time is null, and metadata is `{}`.
+Metadata overrides apply to every document in the command. Source times are
+normalized to UTC RFC 3339. Custom metadata is an object with recursively sorted
+keys; floating-point and out-of-range integer numbers are rejected.
+
+Every successful item is fully published in one SQLite transaction, including
+its FTS and 384-dimensional vector rows. Rerunning exact text and metadata returns
+`unchanged` and updates only `last_ingested_at`. Changing either creates an
+immutable revision. Old revisions and passages remain readable; only the current
+revision is indexed. A concurrent source change during embedding returns a
+rerunnable `conflict` rather than overwriting the other writer's revision.
+Ingestion does not rebuild or open the graph.
+
+UTF-8 is retained exactly, including CRLF, BOM, NUL, combining marks, and non-BMP
+characters. Paragraph-aware passages cover every source byte without overlap,
+with a fixed 1024-byte target and UTF-8-safe boundaries. Empty files are valid and
+have zero passages. `get` returns a complete document with all revision IDs, a
+complete revision with its text/metadata and passage IDs, or an exact passage
+citation with source metadata and half-open byte offsets. It does not load
+models or truncate records. Entity and knowledge reads are not yet implemented.
+
+Ingestion uses the common envelope with `complete`, `partial`, or `failed` status.
+Its `result` contains `summary` counts (`added`, `updated`, `unchanged`, `failed`)
+and `items`. Every item has `input`, `source_key`, `status`, `document_id`,
+`revision_id`, `passage_ids`, and `error`. Failed items have null IDs, an empty
+passage-ID list, and `error: {stage, code, message}`; successful items have
+`error: null`. Repeated source keys fail that item. Failures do not undo successful
+items. Valid attempted batches, including all-failed batches, return their result
+on stdout. Exit precedence is runtime failure **1**, otherwise conflict **3**,
+otherwise any failed item **2**, otherwise **0**. Command-level errors retain the
+stderr error envelope.
+
+All limits below must be positive. They are operational bounds, not model or
+passage-representation settings:
+
+| Option | Default |
+| --- | --- |
+| `--max-source-bytes` | 10,485,760 (10 MiB) |
+| `--max-documents` | 1,000 |
+| `--max-passages` | 10,000 per document |
+| `--embedding-batch-size` | 32 |
+| `--max-json-bytes` | 1,048,576 (metadata argument) |
+| `--writer-lock-timeout-ms` | 2,000 |
+
+Stdin, JSON Lines, manifests, and hybrid search are not yet implemented.
+`ingest --describe` describes only the implemented file-command options as JSON,
+with the same generated validator used for execution and a valid example.
+
+### Local embedding cache
+
+Changed nonempty documents lazily load one local FastEmbed 7.1.0/ONNX Runtime
+session per command. The embedding is
+`Qdrant/all-MiniLM-L6-v2-onnx@8f518e882455312b086101e60691f5e6e2f05c3c`,
+mean pooled, maximum token length 256, unit-normalized, 384 dimensions. Model
+configuration, tokenizer files, and weights are hash-verified against the pinned
+[artifact identities](spikes/rust-packaging/models.json) before inference.
+Source text and metadata never enter a network request.
+
+Without an override, the stock synchronous `hf-hub` 0.5.0 cache is used:
+`$HF_HOME/hub`, or `~/.cache/huggingface/hub` if `HF_HOME` is unset. This client
+does not use `HF_HUB_CACHE`. Cache hits are verified without a network probe;
+missing embedding artifacts are acquired from the exact immutable revision at
+`https://huggingface.co`. No reranker is acquired. Public artifact requests use no
+credentials. Network/policy failures are reported as `model_unavailable`; no
+alternate provider or revision is tried.
+
+Set `COMMONPLACE_MODEL_CACHE` for a **strict offline** deployment or test cache
+using `<cache>/<revision>/<filename>` (the P2 cache layout). All five embedding
+artifacts must be present. Missing or corrupt files fail explicitly; this override
+never downloads or replaces anything. Corrupt ordinary cache hits also fail
+without automatic replacement. Unchanged and empty documents require no model.
+
+## Development checks
 
 ```sh
 cargo fmt --all -- --check
@@ -170,6 +268,28 @@ directory publication currently uses `File::open(directory).sync_all()`.
 Windows-compatible directory synchronization for initialization, activation,
 restoration, and cleanup still needs implementation/verification in P10 before
 release. Sync errors remain explicit; there is no no-op or fallback.
+
+Ordinary tests use deterministic substitutes only for expensive inference; they
+use real SQLite, FTS5, and sqlite-vec and never acquire model weights. The separate
+real-model integration target is ignored by default. Explicit invocation requires
+the prepared cache and fails, rather than skipping, if it is absent or corrupt:
+
+```sh
+COMMONPLACE_MODEL_CACHE=/absolute/path/to/prepared/pinned-models \
+  cargo test --locked --offline --test real_models -- \
+  --ignored --exact real_model_ingest_get_offline --nocapture
+```
+
+This target runs the public binary over multiple files, repeats ingestion, makes
+metadata and content revisions, reads exact old/new evidence, and checks current
+FTS/vector IDs on a version-2 store. It verifies ingestion leaves graph files
+unchanged, then rebuilds empty and fixture-backed membership graphs and compares
+their old/new passage citations with exact reads. It also verifies offline hits
+through the standard `HF_HOME`
+cache. On macOS, prefix `cargo` with
+`sandbox-exec -p '(version 1)(allow default)(deny network*)'` to enforce network
+denial for the test and its binary children. This is local runtime evidence,
+not other-platform or clean-machine release validation.
 
 Run development checks locally. GitHub Actions CI is disabled to conserve
 Actions usage; enabling or dispatching workflows requires explicit approval.

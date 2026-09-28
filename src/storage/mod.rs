@@ -1,5 +1,8 @@
 pub mod database;
+pub mod documents;
+pub mod evidence;
 pub(crate) mod graph_snapshot;
+pub mod search_index;
 pub mod vocabulary;
 
 use std::path::Path;
