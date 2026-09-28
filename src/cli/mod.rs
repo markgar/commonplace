@@ -1,3 +1,4 @@
+mod ingest;
 mod input;
 mod output;
 
@@ -7,7 +8,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 
 use crate::Result;
-use crate::app::{init, schema};
+use crate::app::{get, init, schema};
 
 use self::output::{CommandResponse, CommandResult, ErrorResponse};
 
@@ -29,6 +30,10 @@ struct Cli {
 enum Command {
     /// Create or validate a knowledge base.
     Init,
+    /// Ingest local UTF-8 files with independently atomic publication.
+    Ingest(ingest::IngestArgs),
+    /// Read a complete document, revision, or exact passage.
+    Get { id: String },
     /// Apply or inspect the additive vocabulary.
     Schema {
         #[command(subcommand)]
@@ -60,7 +65,7 @@ pub fn main() -> ExitCode {
         Ok(response) => match serde_json::to_string_pretty(&response) {
             Ok(json) => {
                 println!("{json}");
-                ExitCode::SUCCESS
+                ExitCode::from(response.exit_code())
             }
             Err(error) => {
                 eprintln!("failed to serialize command result: {error}");
@@ -82,6 +87,12 @@ pub fn main() -> ExitCode {
 
 fn execute(cli: Cli) -> Result<CommandResponse> {
     match cli.command {
+        Command::Ingest(args) => ingest::execute(&cli.store, args),
+        Command::Get { id } => Ok(CommandResponse::new(
+            "get",
+            "complete",
+            CommandResult::Get(get::get(&cli.store, &id)?),
+        )),
         Command::Init => {
             let result = init::initialize(&cli.store)?;
             Ok(CommandResponse::init(result))
@@ -134,6 +145,9 @@ impl Command {
     const fn operation(&self) -> &'static str {
         match self {
             Self::Init => "init",
+            Self::Ingest(args) if args.describe => "ingest.describe",
+            Self::Ingest(_) => "ingest",
+            Self::Get { .. } => "get",
             Self::Schema {
                 command: SchemaCommand::Show,
             } => "schema.show",

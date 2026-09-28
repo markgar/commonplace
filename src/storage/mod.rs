@@ -1,4 +1,7 @@
 pub mod database;
+pub mod documents;
+pub mod evidence;
+pub mod search_index;
 pub mod vocabulary;
 
 use std::path::Path;

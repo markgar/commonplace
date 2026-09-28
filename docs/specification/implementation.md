@@ -611,6 +611,15 @@ The following operational limits are explicit configuration:
 - writer-lock timeout; and
 - maximum JSON input size.
 
+P3's positive operational defaults are 10 MiB source bytes, 1,000 documents,
+10,000 passages per document, embedding batches of 32, 1 MiB metadata JSON, and a
+2,000 ms writer-lock timeout. The file command exposes these as
+`--max-source-bytes`, `--max-documents`, `--max-passages`,
+`--embedding-batch-size`, `--max-json-bytes`, and `--writer-lock-timeout-ms`.
+They bound work without eagerly allocating from a caller-supplied limit.
+The fixed 1024-byte passage representation is defined in persistence section 5,
+not a per-request tuning option.
+
 CLI input and result JSON schemas are finalized alongside the workflow that
 first uses them. They are generated from the executable validators through the
 `--describe --json` commands rather than duplicated as hand-maintained schema
