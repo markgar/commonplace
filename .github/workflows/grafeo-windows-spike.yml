@@ -1,0 +1,62 @@
+name: Grafeo Windows spike
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.1
+
+      - name: Build release executable
+        run: cargo build --manifest-path spikes/grafeo-evaluation/Cargo.toml --release --locked
+
+      - name: Run build-host smoke test
+        shell: pwsh
+        run: |
+          $data = Join-Path $env:RUNNER_TEMP "grafeo-build-host"
+          New-Item -ItemType Directory -Force -Path $data | Out-Null
+          $env:COMMONPLACE_GRAFEO_DATA_DIR = $data
+          & .\spikes\grafeo-evaluation\target\release\grafeo-evaluation.exe |
+            Tee-Object -FilePath .\spikes\grafeo-evaluation\windows-build-result.json
+
+      - name: Record executable metadata
+        shell: pwsh
+        run: |
+          $exe = ".\spikes\grafeo-evaluation\target\release\grafeo-evaluation.exe"
+          $item = Get-Item $exe
+          $hash = Get-FileHash -Algorithm SHA256 $exe
+          @(
+            "Target: x86_64-pc-windows-msvc"
+            "Bytes: $($item.Length)"
+            "SHA256: $($hash.Hash)"
+          ) | Set-Content .\spikes\grafeo-evaluation\windows-artifact.txt
+
+      - name: Stage portable artifact
+        shell: pwsh
+        run: |
+          $dist = ".\spikes\grafeo-evaluation\target\windows-dist"
+          New-Item -ItemType Directory -Force -Path $dist | Out-Null
+          Copy-Item .\spikes\grafeo-evaluation\target\release\grafeo-evaluation.exe $dist
+          Copy-Item .\spikes\grafeo-evaluation\verify-windows.ps1 $dist
+          Copy-Item .\spikes\grafeo-evaluation\windows-build-result.json $dist
+          Copy-Item .\spikes\grafeo-evaluation\windows-artifact.txt $dist
+
+      - name: Upload Windows executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: grafeo-windows-x64
+          path: spikes/grafeo-evaluation/target/windows-dist/
+          if-no-files-found: error
+          retention-days: 14

@@ -44,6 +44,9 @@ The selected vector extension must demonstrate:
 Failure of a required component reopens that component or the implementation
 language choice. It does not introduce parallel backends.
 
+The completed macOS arm64 technology-gate evidence and pinned selections are
+recorded in [the Rust packaging spike](../spikes/rust-packaging.md).
+
 ## 3. Implementation sequence
 
 1. **Packaging spike**
