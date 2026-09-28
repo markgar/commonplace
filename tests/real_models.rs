@@ -311,8 +311,10 @@ fn real_model_ingest_get_offline() {
         json!([])
     );
 
-    // P5b owns authoring commands; cite real ingested passages via a committed fixture.
-    store.apply(&json!({"entity_types":[{"name":"person"}]}), false);
+    store.apply(
+        &json!({"entity_types":[{"name":"person"},{"name":"lead"}]}),
+        false,
+    );
     let passages = [
         added["result"]["items"][0]["passage_ids"][0]
             .as_str()
@@ -321,34 +323,29 @@ fn real_model_ingest_get_offline() {
             .as_str()
             .unwrap(),
     ];
-    let mut db = store.database();
-    db.execute_batch("PRAGMA foreign_keys=ON").unwrap();
-    let tx = db.transaction().unwrap();
-    tx.execute_batch(
-        "INSERT INTO entities VALUES (1,'Ada','2026-01-01T00:00:00Z',NULL);
-         INSERT INTO knowledge_items VALUES
-             (1,'type_membership',1,'2026-01-01T00:00:00Z',NULL,NULL,NULL);
-         INSERT INTO entity_type_memberships VALUES (1,1,1);
-         UPDATE store_state SET knowledge_version=1;",
-    )
-    .unwrap();
-    for passage in passages {
-        tx.execute(
-            "INSERT INTO knowledge_item_evidence VALUES (1,?1)",
-            [passage
-                .strip_prefix("passage:")
-                .unwrap()
-                .parse::<i64>()
-                .unwrap()],
-        )
-        .unwrap();
-    }
-    tx.commit().unwrap();
-    drop(db);
-    store.failure(
-        &["graph", "query", "SELECT ?s WHERE { ?s ?p ?o }"],
-        "graph_unavailable",
-        1,
+    let input = store.input(&json!({"created_by":"offline-acceptance","items":[
+        {"kind":"entity","ref":"ada","name":"Ada"},
+        {"kind":"type_membership","entity":{"ref":"ada"},"entity_type":"person",
+            "support":passages.iter().map(|id| json!({"passage_id":id})).collect::<Vec<_>>()},
+        {"kind":"type_membership","entity":{"ref":"ada"},"entity_type":"lead","support":[]}
+    ]}));
+    let recorded = execute(&["record", input.to_str().unwrap()]);
+    assert_eq!(recorded["result"]["knowledge_version"], 1);
+    assert_eq!(recorded["result"]["summary"]["memberships_created"], 2);
+    assert_eq!(
+        execute(&["get", "entity:1"])["result"]["active_type_membership_ids"],
+        json!(["knowledge:1", "knowledge:2"])
+    );
+    assert_eq!(
+        execute(&["get", "knowledge:1"])["result"]["support"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        execute(&["get", "knowledge:2"])["result"]["support"],
+        json!([])
     );
     let citation_query = "PREFIX c: <urn:commonplace:property:>
         SELECT ?p ?r ?d ?text ?start ?end WHERE {
@@ -356,11 +353,13 @@ fn real_model_ingest_get_offline() {
             ?p c:revision ?r; c:text ?text; c:start_byte ?start; c:end_byte ?end .
             ?r c:document ?d
         } ORDER BY ?p";
+    let published = execute(&["graph", "query", citation_query])["result"].clone();
     assert_eq!(
         execute(&["graph", "rebuild"])["result"],
         json!({"knowledge_version":1})
     );
     let citations = execute(&["graph", "query", citation_query])["result"].clone();
+    assert_eq!(citations, published);
     assert_eq!(citations["rows"].as_array().unwrap().len(), 2);
     for passage in passages {
         let exact = execute(&["get", passage]);
@@ -388,7 +387,7 @@ fn real_model_ingest_get_offline() {
     );
     assert_eq!(execute(&["init"])["status"], "unchanged");
     println!(
-        "PASS pinned local model; v2 multi-file public binary, unchanged/content/metadata revisions, exact UTF-8 get, current FTS/vector parity, strict override and default HF cache hits, unchanged graph bytes during ingest, empty/membership rebuild and exact old/new citation parity; cache={}",
+        "PASS pinned local model; v2 multi-file public binary, unchanged/content/metadata revisions, exact UTF-8 get, current FTS/vector parity, strict override and default HF cache hits, unchanged graph bytes during ingest, public multiply-typed record/get/SPARQL/rebuild/reopen and exact old/new citation parity; cache={}",
         cache.display()
     );
 }
