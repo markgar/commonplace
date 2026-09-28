@@ -264,31 +264,32 @@ mod tests {
 
     #[test]
     fn discovers_platform_configuration_paths() {
-        let mac = TestEnvironment::default().with("HOME", "/Users/scout");
+        let mac = TestEnvironment::default().with("HOME", "/Users/example");
         assert_eq!(
             discover_config_path(&mac, Platform::Macos).unwrap(),
-            PathBuf::from("/Users/scout/Library/Application Support/commonplace/config.json")
+            PathBuf::from("/Users/example/Library/Application Support/commonplace/config.json")
         );
 
         let unix = TestEnvironment::default()
-            .with("HOME", "/home/scout")
+            .with("HOME", "/home/example")
             .with("XDG_CONFIG_HOME", "/var/config");
         assert_eq!(
             discover_config_path(&unix, Platform::Unix).unwrap(),
             PathBuf::from("/var/config/commonplace/config.json")
         );
         let fallback = TestEnvironment::default()
-            .with("HOME", "/home/scout")
+            .with("HOME", "/home/example")
             .with("XDG_CONFIG_HOME", "relative");
         assert_eq!(
             discover_config_path(&fallback, Platform::Unix).unwrap(),
-            PathBuf::from("/home/scout/.config/commonplace/config.json")
+            PathBuf::from("/home/example/.config/commonplace/config.json")
         );
 
-        let windows = TestEnvironment::default().with("APPDATA", r"C:\Users\Scout\AppData\Roaming");
+        let windows =
+            TestEnvironment::default().with("APPDATA", r"C:\Users\example\AppData\Roaming");
         assert_eq!(
             discover_config_path(&windows, Platform::Windows).unwrap(),
-            PathBuf::from(r"C:\Users\Scout\AppData\Roaming")
+            PathBuf::from(r"C:\Users\example\AppData\Roaming")
                 .join("commonplace")
                 .join("config.json")
         );

@@ -670,15 +670,15 @@ For example, a loaded file produces the common JSON envelope with:
 ```json
 {
   "config_file": {
-    "path": "/Users/scout/Library/Application Support/commonplace/config.json",
+    "path": "/Users/example/Library/Application Support/commonplace/config.json",
     "status": "loaded"
   },
   "store": {
-    "path": "/Users/scout/.local/share/commonplace/stores/personal",
+    "path": "/Users/example/.local/share/commonplace/stores/personal",
     "source": "user_config"
   },
   "model_cache": {
-    "path": "/Users/scout/.local/share/commonplace/releases/current/pinned-models",
+    "path": "/Users/example/.local/share/commonplace/releases/current/pinned-models",
     "source": "user_config"
   }
 }

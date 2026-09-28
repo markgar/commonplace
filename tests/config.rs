@@ -23,6 +23,20 @@ fn output_json(command: &mut Command) -> Value {
 }
 
 #[test]
+fn isolated_commands_remove_inherited_path_overrides() {
+    let store = Store::new();
+    let command = store.command_without_store();
+    for name in ["COMMONPLACE_STORE", "COMMONPLACE_MODEL_CACHE"] {
+        assert!(
+            command
+                .get_envs()
+                .any(|(key, value)| key == name && value.is_none()),
+            "{name} must be removed unless a test sets it explicitly"
+        );
+    }
+}
+
+#[test]
 fn config_show_reports_absent_file_and_fallbacks() {
     let store = Store::new();
     let value = output_json(store.command_without_store().args(["config", "show"]));
