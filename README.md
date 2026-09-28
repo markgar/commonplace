@@ -122,8 +122,8 @@ never merges by name. Memberships resolve exactly one selector: `{"id":"entity:1
 `{"identifier":{"scheme":"email","value":"riley@example.test"}}`, `{"name":"R"}`,
 or `{"ref":"riley"}`. Exact case-sensitive name/alias matches must be unambiguous.
 Local refs match `[A-Za-z][A-Za-z0-9_]{0,63}`, refer only to preceding entity items,
-and last only for this request. Facts, JSONL, withdrawal, and name changes are
-not supported by this release.
+and last only for this request. Fact authoring, `record` JSONL, withdrawal, and
+name changes are not supported by this release (`ingest --jsonl` is supported).
 
 `entity_metadata` items require `entity_id` and accept `add_aliases`,
 `remove_aliases`, `add_identifiers`, and `remove_identifiers`. Removals must belong
