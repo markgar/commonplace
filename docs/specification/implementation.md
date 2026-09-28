@@ -52,6 +52,14 @@ selected graph engine separately on every intended OS and architecture. The
 packaging slice must replace Ladybug with Grafeo and rerun the complete bundle
 before release.
 
+The first release supports:
+
+- macOS arm64;
+- Windows x64 and arm64; and
+- Linux x64 and arm64.
+
+macOS x64 is not a release target.
+
 ## 3. Implementation sequence
 
 1. **Packaging spike**
