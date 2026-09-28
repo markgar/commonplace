@@ -48,6 +48,10 @@ JSON is the default output; `--json` explicitly requests the same format. The
 Schema and graph operations use the same
 `operation`, `contract_version`, `status`, and `result` envelope.
 
+`schema apply` and `schema show` manage **your vocabulary**: entity types,
+identifier schemes, and predicates. `graph schema` describes **the RDF mapping**:
+how Commonplace represents authored knowledge and citations for SPARQL queries.
+
 Input collections may be omitted. Names match `[a-z][a-z0-9_]*`; terms may include
 an optional string `description`. Predicate `object_kind` is `entity`, `string`,
 `integer`, `boolean`, or `timestamp`. Every predicate needs nonempty
@@ -155,6 +159,11 @@ is never renamed or removed.
 
 ## Ingestion and exact reads
 
+The [Riley notebook fixture](fixtures/meeting-notes/README.md) provides separate
+collections of personal Obsidian notes and shared Teams AI recaps. Its 36
+documents cover Project Lantern, onboarding, escalation handoffs, manager 1:1s,
+community volunteering, and Riley's planning, reflection, and people map.
+
 ```sh
 cargo run --bin commonplace -- --store .commonplace ingest notes.md other.txt
 cargo run --bin commonplace -- --store .commonplace ingest ./notes --recursive \
@@ -211,6 +220,20 @@ items. Valid attempted batches, including all-failed batches, return their resul
 on stdout. Exit precedence is runtime failure **1**, otherwise conflict **3**,
 otherwise any failed item **2**, otherwise **0**. Command-level errors retain the
 stderr error envelope.
+
+For automation, capture stdout, stderr, and the exit code separately. A nonzero
+exit does **not** mean stdout is empty or that no files were saved:
+
+| Outcome | Where to read it | What the caller should do |
+| --- | --- | --- |
+| Completed batch (exit 0) | stdout JSON | Read `result.summary` and returned IDs. |
+| Partial or all-failed batch (nonzero exit) | stdout JSON | Inspect `result.items[].error`; successful items remain saved. |
+| Command-level failure (nonzero exit) | stderr JSON | Inspect `error.code` and `error.message`. |
+| Invalid CLI syntax (exit 2) | stderr usage text | Correct the arguments; do not assume stderr is always JSON. |
+
+Do not discard stdout on a nonzero exit or merge stderr into stdout before
+parsing JSON. Use the envelope's `status` and per-item errors for details; the
+exit code alone cannot distinguish a failed batch from a command-level failure.
 
 All limits below must be positive. They are operational bounds, not model or
 passage-representation settings:

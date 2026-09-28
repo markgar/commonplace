@@ -35,11 +35,11 @@ enum Command {
         #[command(subcommand)]
         command: GraphCommand,
     },
-    /// Ingest local UTF-8 files with independently atomic publication.
+    /// Ingest local UTF-8 files; each file succeeds or fails independently.
     Ingest(ingest::IngestArgs),
-    /// Read a complete document, revision, or exact passage.
+    /// Read document metadata, revision text, or an exact passage.
     Get { id: String },
-    /// Apply or inspect the additive vocabulary.
+    /// Apply or inspect your vocabulary (entity types, predicates, and identifiers).
     Schema {
         #[command(subcommand)]
         command: SchemaCommand,
@@ -48,7 +48,7 @@ enum Command {
 
 #[derive(Debug, Subcommand)]
 enum GraphCommand {
-    /// Describe the RDF mapping without opening a store.
+    /// Describe how knowledge maps to RDF, not your vocabulary; no store required.
     Schema,
     /// Run a local, native read-only SPARQL SELECT.
     Query {
@@ -76,7 +76,7 @@ enum SchemaCommand {
         #[arg(long)]
         describe: bool,
     },
-    /// Read the complete vocabulary.
+    /// Read your complete vocabulary, not the RDF mapping (see graph schema).
     Show,
 }
 
@@ -225,6 +225,36 @@ mod tests {
 
     use super::Cli;
     use super::execute;
+
+    #[test]
+    fn help_distinguishes_vocabulary_mapping_and_file_outcomes() {
+        for (args, expected) in [
+            (
+                vec!["commonplace", "--help"],
+                "your vocabulary (entity types, predicates, and identifiers)",
+            ),
+            (
+                vec!["commonplace", "schema", "--help"],
+                "not the RDF mapping",
+            ),
+            (
+                vec!["commonplace", "graph", "schema", "--help"],
+                "not your vocabulary",
+            ),
+            (
+                vec!["commonplace", "ingest", "--help"],
+                "each file succeeds or fails independently",
+            ),
+            (
+                vec!["commonplace", "get", "--help"],
+                "document metadata, revision text, or an exact passage",
+            ),
+        ] {
+            let help = Cli::try_parse_from(args).expect_err("help exits before execution");
+            assert_eq!(help.kind(), clap::error::ErrorKind::DisplayHelp);
+            assert!(help.to_string().contains(expected), "{help}");
+        }
+    }
 
     #[test]
     fn init_command_is_idempotent() {
