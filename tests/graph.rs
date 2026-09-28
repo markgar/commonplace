@@ -108,7 +108,7 @@ fn init_schema_query_rebuild_reopen_and_unused_vocabulary() {
     assert_eq!(schema["result"]["rdf"], "1.1");
     assert_eq!(
         schema["result"]["projection"]["supported_knowledge_kinds"],
-        json!(["type_membership"])
+        json!(["type_membership", "fact"])
     );
     for example in schema["result"]["examples"].as_array().unwrap() {
         query(&store, example.as_str().unwrap());
@@ -550,12 +550,12 @@ fn unavailable_graphs_fail_closed_and_explicit_rebuild_recovers_known_scratch_on
 }
 
 #[test]
-fn invalid_subtypes_or_unsupported_facts_preserve_current() {
+fn invalid_subtypes_or_fact_endpoints_preserve_current() {
     for damage in [
         "no-subtype",
         "both",
         "wrong-kind",
-        "fact",
+        "fact-endpoints",
         "bad-slice",
         "negative-id",
     ] {
@@ -572,7 +572,7 @@ fn invalid_subtypes_or_unsupported_facts_preserve_current() {
                 )
                 .unwrap();
             }
-            "both" | "fact" => {
+            "both" | "fact-endpoints" => {
                 db.execute(
                     "INSERT INTO predicates VALUES (1,'knows','entity',NULL,1)",
                     [],
@@ -580,7 +580,7 @@ fn invalid_subtypes_or_unsupported_facts_preserve_current() {
                 .unwrap();
                 db.execute("INSERT INTO facts VALUES (100,10,1,11,NULL)", [])
                     .unwrap();
-                if damage == "fact" {
+                if damage == "fact-endpoints" {
                     db.execute_batch("DELETE FROM entity_type_memberships WHERE knowledge_item_id=100; UPDATE knowledge_items SET kind='fact' WHERE knowledge_item_id=100").unwrap();
                 }
             }

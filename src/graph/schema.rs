@@ -186,8 +186,7 @@ pub fn describe() -> GraphSchema {
         properties: properties(),
         projection: json!({
             "graph": "default",
-            "supported_knowledge_kinds": ["type_membership"],
-            "unsupported_active_facts": "error; fact projection and authoring are delivered by P6",
+            "supported_knowledge_kinds": ["type_membership", "fact"],
             "fact_mapping": {"properties": ["id", "kind", "schema_version", "subject", "predicate", "object", "evidence"],
                 "literal_properties": ["literal_kind", "literal_json"],
                 "datatypes": {"string":"xsd:string", "integer":"xsd:integer", "boolean":"xsd:boolean", "timestamp":"xsd:dateTime"}},

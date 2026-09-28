@@ -552,7 +552,10 @@ fn real_model_ingest_get_offline() {
     );
 
     store.apply(
-        &json!({"entity_types":[{"name":"person"},{"name":"lead"}]}),
+        &json!({"entity_types":[{"name":"person"},{"name":"lead"}],"predicates":[
+            {"name":"reports_to","object_kind":"entity","subject_types":["person"],"object_types":["lead"]},
+            {"name":"decision","object_kind":"string","subject_types":["person"]}
+        ]}),
         false,
     );
     let passages = [
@@ -567,11 +570,32 @@ fn real_model_ingest_get_offline() {
         {"kind":"entity","ref":"ada","name":"Ada"},
         {"kind":"type_membership","entity":{"ref":"ada"},"entity_type":"person",
             "support":passages.iter().map(|id| json!({"passage_id":id})).collect::<Vec<_>>()},
-        {"kind":"type_membership","entity":{"ref":"ada"},"entity_type":"lead","support":[]}
+        {"kind":"type_membership","entity":{"ref":"ada"},"entity_type":"lead","support":[]},
+        {"kind":"entity","ref":"lead","name":"Grace"},
+        {"kind":"type_membership","entity":{"ref":"lead"},"entity_type":"lead"},
+        {"kind":"fact","subject":{"ref":"ada"},"predicate":"reports_to","object":{"entity":{"ref":"lead"}},
+            "support":passages.iter().map(|id| json!({"passage_id":id})).collect::<Vec<_>>()},
+        {"kind":"fact","subject":{"ref":"ada"},"predicate":"decision","object":{"literal":"approved"},
+            "support":passages.iter().map(|id| json!({"passage_id":id})).collect::<Vec<_>>()}
     ]}));
     let recorded = execute(&["record", input.to_str().unwrap()]);
     assert_eq!(recorded["result"]["knowledge_version"], 1);
-    assert_eq!(recorded["result"]["summary"]["memberships_created"], 2);
+    assert_eq!(recorded["result"]["summary"]["memberships_created"], 3);
+    assert_eq!(recorded["result"]["summary"]["facts_created"], 2);
+    assert_eq!(
+        execute(&["get", "knowledge:4"])["result"]["object"],
+        json!({"entity_id":"entity:2"})
+    );
+    assert_eq!(
+        execute(&["get", "knowledge:5"])["result"]["object"],
+        json!({
+            "literal_kind":"string","literal":"approved","literal_json":"\"approved\""
+        })
+    );
+    assert_eq!(
+        execute(&["get", "entity:1"])["result"]["active_fact_ids"],
+        json!(["knowledge:4", "knowledge:5"])
+    );
     assert_eq!(
         execute(&["get", "entity:1"])["result"]["active_type_membership_ids"],
         json!(["knowledge:1", "knowledge:2"])
@@ -594,6 +618,24 @@ fn real_model_ingest_get_offline() {
             ?r c:document ?d
         } ORDER BY ?p";
     let published = execute(&["graph", "query", citation_query])["result"].clone();
+    let fact_query = "PREFIX c:<urn:commonplace:property:> SELECT ?k ?subject ?predicate ?object ?p ?text WHERE {
+        ?k c:kind \"fact\"; c:subject ?subject; c:predicate ?predicate; c:object ?object; c:evidence ?p.
+        ?p c:text ?text } ORDER BY ?k ?p";
+    let fact_graph = execute(&["graph", "query", fact_query])["result"].clone();
+    assert_eq!(fact_graph["rows"].as_array().unwrap().len(), 4);
+    assert_eq!(
+        fact_graph["rows"][0][0]["value"],
+        "urn:commonplace:knowledge:4"
+    );
+    assert_eq!(
+        fact_graph["rows"][0][3],
+        json!({"type":"uri","value":"urn:commonplace:entity:2"})
+    );
+    assert_eq!(
+        fact_graph["rows"][2][3],
+        json!({"type":"literal","value":"approved",
+        "datatype":"http://www.w3.org/2001/XMLSchema#string","language":null})
+    );
     assert_eq!(
         execute(&["graph", "rebuild"])["result"],
         json!({"knowledge_version":1})
@@ -619,6 +661,34 @@ fn real_model_ingest_get_offline() {
         assert_eq!(row[3]["value"], exact["text"]);
         assert_eq!(row[4]["value"], exact["start_byte"].to_string());
         assert_eq!(row[5]["value"], exact["end_byte"].to_string());
+        for id in ["knowledge:4", "knowledge:5"] {
+            let got = execute(&["get", id]);
+            let support = got["result"]["support"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|support| support["passage_id"] == passage)
+                .unwrap();
+            for field in [
+                "text",
+                "start_byte",
+                "end_byte",
+                "document_id",
+                "revision_id",
+                "metadata",
+            ] {
+                assert_eq!(support[field], exact[field]);
+            }
+            let row = fact_graph["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| {
+                    row[0]["value"] == format!("urn:commonplace:{id}") && row[4]["value"] == uri
+                })
+                .unwrap();
+            assert_eq!(row[5]["value"], exact["text"]);
+        }
     }
     execute(&["graph", "rebuild"]);
     assert_eq!(
@@ -626,6 +696,10 @@ fn real_model_ingest_get_offline() {
         citations
     );
     assert_eq!(execute(&["init"])["status"], "unchanged");
+    assert_eq!(
+        execute(&["graph", "query", fact_query])["result"],
+        fact_graph
+    );
     let removed_document = execute(&["get", doc])["result"].clone();
     let source_key = removed_document["source_key"].as_str().unwrap();
     assert!(source_key.starts_with("file://"));
@@ -651,6 +725,14 @@ fn real_model_ingest_get_offline() {
         {"kind":"type_membership","entity":{"id":"entity:1"},"entity_type":"person",
             "support":[{"passage_id":passages[0]},{"passage_id":unrelated_passage}]},
         {"kind":"type_membership","entity":{"id":"entity:1"},"entity_type":"lead",
+            "support":[{"passage_id":unrelated_passage}]},
+        {"kind":"fact","subject":{"id":"entity:1"},"predicate":"reports_to","object":{"entity":{"id":"entity:2"}},
+            "support":[{"passage_id":passages[0]},{"passage_id":unrelated_passage}]},
+        {"kind":"fact","subject":{"id":"entity:1"},"predicate":"decision","object":{"literal":"approved"},
+            "support":[{"passage_id":passages[0]},{"passage_id":unrelated_passage}]},
+        {"kind":"fact","subject":{"id":"entity:1"},"predicate":"reports_to","object":{"entity":{"id":"entity:2"}},
+            "support":[{"passage_id":unrelated_passage}]},
+        {"kind":"fact","subject":{"id":"entity:1"},"predicate":"decision","object":{"literal":"approved"},
             "support":[{"passage_id":unrelated_passage}]}
     ]}));
     let extra = execute(&["record", input.to_str().unwrap()]);
@@ -661,14 +743,29 @@ fn real_model_ingest_get_offline() {
         .as_str()
         .unwrap();
     let untouched_knowledge = execute(&["get", unrelated_id]);
+    let fact_ids = ["knowledge:4", "knowledge:5"]
+        .into_iter()
+        .chain(
+            extra["result"]["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .skip(2)
+                .map(|item| item["knowledge_id"].as_str().unwrap()),
+        )
+        .collect::<Vec<_>>();
+    let facts_before = fact_ids
+        .iter()
+        .map(|id| execute(&["get", id])["result"].clone())
+        .collect::<Vec<_>>();
     let expected_version = extra["result"]["knowledge_version"].as_i64().unwrap() + 1;
     let removed = execute(&["remove", "--source-key", source_key, "--json"]);
     assert_eq!(
         removed["result"],
         json!({
             "source_key":source_key,"document_id":doc,"deleted_revisions":3,
-            "deleted_passages":removed_passages.len(),"detached_evidence":3,
-            "affected_knowledge_ids":["knowledge:1",mixed_id],"knowledge_version":expected_version
+            "deleted_passages":removed_passages.len(),"detached_evidence":9,
+            "affected_knowledge_ids":["knowledge:1","knowledge:4","knowledge:5",mixed_id,fact_ids[2],fact_ids[3]],"knowledge_version":expected_version
         })
     );
     for id in std::iter::once(json!(doc))
@@ -755,6 +852,64 @@ fn real_model_ingest_get_offline() {
     );
     assert_eq!(execute(&["get", unrelated_id]), untouched_knowledge);
     assert_eq!(execute(&["get", unrelated_doc]), unrelated_before);
+    for (index, (id, before)) in fact_ids.iter().zip(&facts_before).enumerate() {
+        let mut expected = before.clone();
+        expected["support"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|support| support["source_key"] != source_key);
+        let got = execute(&["get", id])["result"].clone();
+        assert_eq!(got, expected);
+        assert_eq!(got["withdrawn_at"], Value::Null);
+        assert_eq!(
+            got["support"].as_array().unwrap().len(),
+            usize::from(index >= 2)
+        );
+        if index >= 2 {
+            assert_eq!(got["support"][0]["passage_id"], unrelated_passage);
+        }
+    }
+    let retained_fact_query = "PREFIX c:<urn:commonplace:property:>
+        SELECT ?k ?s ?predicate ?object ?json ?p ?text WHERE {
+            ?k c:kind \"fact\"; c:subject ?s; c:predicate ?predicate; c:object ?object .
+            OPTIONAL {?k c:literal_json ?json} OPTIONAL {?k c:evidence ?p . ?p c:text ?text}
+        } ORDER BY ?k";
+    let retained_facts = execute(&["graph", "query", retained_fact_query])["result"].clone();
+    assert_eq!(retained_facts["rows"].as_array().unwrap().len(), 6);
+    let unrelated_exact = execute(&["get", unrelated_passage.as_str().unwrap()])["result"].clone();
+    for (index, id) in fact_ids.iter().enumerate() {
+        let row = retained_facts["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row[0]["value"] == format!("urn:commonplace:{id}"))
+            .unwrap();
+        assert_eq!(row[1]["value"], "urn:commonplace:entity:1");
+        if index % 2 == 0 {
+            assert_eq!(
+                row[3],
+                json!({"type":"uri","value":"urn:commonplace:entity:2"})
+            );
+            assert_eq!(row[4], Value::Null);
+        } else {
+            assert_eq!(
+                row[3],
+                json!({"type":"literal","value":"approved",
+                "datatype":"http://www.w3.org/2001/XMLSchema#string","language":null})
+            );
+            assert_eq!(row[4]["value"], "\"approved\"");
+        }
+        if index < 2 {
+            assert_eq!(row[5], Value::Null);
+            assert_eq!(row[6], Value::Null);
+        } else {
+            assert_eq!(
+                row[5]["value"],
+                format!("urn:commonplace:{}", unrelated_passage.as_str().unwrap())
+            );
+            assert_eq!(row[6]["value"], unrelated_exact["text"]);
+        }
+    }
     assert_eq!(
         execute(&["graph", "query", citation_query])["result"]["rows"],
         json!([])
@@ -787,6 +942,13 @@ fn real_model_ingest_get_offline() {
                 && !removed_passages.contains(&item["passage_id"]))
     );
     store.failure(&["remove", "--source-key", source_key], "not_found", 2);
+    let all_query = "SELECT ?s ?p ?o WHERE {?s ?p ?o} ORDER BY ?s ?p ?o";
+    let canonical_graph = execute(&["graph", "query", all_query])["result"].clone();
+    assert_eq!(canonical_graph["truncated"], false);
+    assert_eq!(
+        execute(&["get", "entity:1"])["result"]["active_fact_ids"],
+        json!(fact_ids)
+    );
     assert_eq!(execute(&["init"])["status"], "unchanged");
     assert_eq!(
         execute(&["graph", "rebuild"])["result"]["knowledge_version"],
@@ -800,17 +962,41 @@ fn real_model_ingest_get_offline() {
         execute(&["graph", "query", &mixed_query])["result"],
         mixed_graph
     );
+    assert_eq!(
+        execute(&["graph", "query", all_query])["result"],
+        canonical_graph
+    );
+    assert_eq!(
+        execute(&["graph", "query", retained_fact_query])["result"],
+        retained_facts
+    );
     let again = execute(&["ingest", a.to_str().unwrap()]);
     assert_eq!(again["result"]["summary"]["added"], 1);
     assert_ne!(again["result"]["items"][0]["document_id"], doc);
     assert_eq!(again["result"]["items"][0]["source_key"], source_key);
     assert_eq!(execute(&["get", "knowledge:1"]), retained);
     assert_eq!(
+        execute(&["graph", "query", all_query])["result"],
+        canonical_graph
+    );
+    assert_eq!(
         execute(&["graph", "query", optional_query])["result"],
         retained_graph
     );
+    assert_eq!(
+        execute(&["graph", "query", retained_fact_query])["result"],
+        retained_facts
+    );
+    for (id, before) in fact_ids.iter().zip(&facts_before) {
+        let mut expected = before.clone();
+        expected["support"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|support| support["source_key"] != source_key);
+        assert_eq!(execute(&["get", id])["result"], expected);
+    }
     println!(
-        "PASS pinned local model; v2 multi-file public binary, unchanged/content/metadata revisions, exact UTF-8 get, current FTS/vector parity, strict override and default HF cache hits, unchanged graph bytes during ingest, public multiply-typed record/get/SPARQL/rebuild/reopen and exact old/new citation parity; explicit file-key removal of all revisions/index/evidence, retained active empty/mixed support and unrelated citations, public search exclusion, reopen/rebuild, and new reingest identity; cache={}",
+        "PASS pinned local model; v2 multi-file public binary, unchanged/content/metadata revisions, exact UTF-8 get, current FTS/vector parity, strict override and default HF cache hits, unchanged graph bytes during ingest, public multiply-typed entity + relationship + literal decision record/get/SPARQL/rebuild/reopen and exact old/new citation parity; explicit file-key removal of all revisions/index/evidence, retained active membership/relationship/literal facts with empty/mixed support and unrelated citations, public search exclusion, reopen/rebuild, and new reingest identity; cache={}",
         cache.display()
     );
 }

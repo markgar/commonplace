@@ -97,7 +97,10 @@ fn state(store: &Store) -> Vec<Vec<i64>> {
 #[test]
 fn removes_all_revisions_retains_knowledge_unrelated_evidence_and_new_identity() {
     let store = Store::new();
-    store.apply(&json!({"entity_types":[{"name":"person"}]}), false);
+    store.apply(&json!({"entity_types":[{"name":"person"}],"predicates":[
+        {"name":"knows","object_kind":"entity","subject_types":["person"],"object_types":["person"]},
+        {"name":"decision","object_kind":"string","subject_types":["person"]}
+    ]}), false);
     let old = ingest(&store, "opaque:key", "old needle evidence");
     let new = ingest(&store, "opaque:key", "new needle evidence");
     let unrelated = ingest(&store, "other:key", "unrelated evidence");
@@ -115,7 +118,19 @@ fn removes_all_revisions_retains_knowledge_unrelated_evidence_and_new_identity()
             {"kind":"type_membership","entity":{"ref":"e"},"entity_type":"person",
                 "support":[{"passage_id":other_passage}]},
             {"kind":"type_membership","entity":{"ref":"e"},"entity_type":"person",
-                "support":[{"passage_id":old_passage}]}
+                "support":[{"passage_id":old_passage}]},
+            {"kind":"fact","subject":{"ref":"e"},"predicate":"knows","object":{"entity":{"ref":"e"}},
+                "support":[{"passage_id":old_passage},{"passage_id":new_passage}]},
+            {"kind":"fact","subject":{"ref":"e"},"predicate":"decision","object":{"literal":"approved"},
+                "support":[{"passage_id":old_passage},{"passage_id":new_passage}]},
+            {"kind":"fact","subject":{"ref":"e"},"predicate":"knows","object":{"entity":{"ref":"e"}},
+                "support":[{"passage_id":old_passage},{"passage_id":other_passage}]},
+            {"kind":"fact","subject":{"ref":"e"},"predicate":"decision","object":{"literal":"approved"},
+                "support":[{"passage_id":old_passage},{"passage_id":other_passage}]},
+            {"kind":"fact","subject":{"ref":"e"},"predicate":"knows","object":{"entity":{"ref":"e"}},
+                "support":[{"passage_id":other_passage}]},
+            {"kind":"fact","subject":{"ref":"e"},"predicate":"decision","object":{"literal":"approved"},
+                "support":[{"passage_id":other_passage}]}
         ]),
     );
     // Retained withdrawn rows predate this operation; removal does not author withdrawal.
@@ -123,7 +138,7 @@ fn removes_all_revisions_retains_knowledge_unrelated_evidence_and_new_identity()
         "UPDATE knowledge_items SET withdrawn_at='2026-01-01T00:00:00Z',withdrawn_by='test' WHERE knowledge_item_id=4", [],
     ).unwrap();
     store.success(&["graph", "rebuild"]);
-    let knowledge_before: Vec<_> = (1..=4)
+    let knowledge_before: Vec<_> = (1..=10)
         .map(|id| store.success(&["get", &format!("knowledge:{id}")])["result"].clone())
         .collect();
     let unrelated_before = store.success(&["get", unrelated["document_id"].as_str().unwrap()]);
@@ -133,8 +148,8 @@ fn removes_all_revisions_retains_knowledge_unrelated_evidence_and_new_identity()
         json!({
             "operation":"remove","contract_version":"1","status":"complete",
             "result":{"source_key":"opaque:key","document_id":old["document_id"],
-                "deleted_revisions":2,"deleted_passages":2,"detached_evidence":4,
-                "affected_knowledge_ids":["knowledge:1","knowledge:2","knowledge:4"],
+                "deleted_revisions":2,"deleted_passages":2,"detached_evidence":10,
+                "affected_knowledge_ids":["knowledge:1","knowledge:2","knowledge:4","knowledge:5","knowledge:6","knowledge:7","knowledge:8"],
                 "knowledge_version":2}
         })
     );
@@ -153,7 +168,7 @@ fn removes_all_revisions_retains_knowledge_unrelated_evidence_and_new_identity()
     for index in [2, 3, 4, 5] {
         assert_eq!(
             remaining[index],
-            if index == 5 { vec![3, 3] } else { vec![3] }
+            if index == 5 { vec![3; 6] } else { vec![3] }
         );
     }
     assert_eq!(remaining[6], vec![2]);
@@ -177,6 +192,62 @@ fn removes_all_revisions_retains_knowledge_unrelated_evidence_and_new_identity()
         ids(&store, "SELECT entity_type_id FROM entity_types"),
         vec![1]
     );
+    assert_eq!(
+        ids(
+            &store,
+            "SELECT knowledge_item_id FROM facts ORDER BY knowledge_item_id"
+        ),
+        (5..=10).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        store.success(&["get", "entity:1"])["result"]["active_fact_ids"],
+        json!([
+            "knowledge:5",
+            "knowledge:6",
+            "knowledge:7",
+            "knowledge:8",
+            "knowledge:9",
+            "knowledge:10"
+        ])
+    );
+    let fact_query = "PREFIX c:<urn:commonplace:property:>
+        SELECT ?k ?s ?predicate ?object ?json ?p WHERE {
+            ?k c:kind \"fact\"; c:subject ?s; c:predicate ?predicate; c:object ?object .
+            OPTIONAL {?k c:literal_json ?json} OPTIONAL {?k c:evidence ?p}
+        } ORDER BY ?k";
+    let fact_graph = store.success(&["graph", "query", fact_query])["result"].clone();
+    assert_eq!(fact_graph["rows"].as_array().unwrap().len(), 6);
+    for index in 0..6 {
+        let row = fact_graph["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row[0]["value"] == format!("urn:commonplace:knowledge:{}", index + 5))
+            .unwrap();
+        assert_eq!(row[1]["value"], "urn:commonplace:entity:1");
+        if index % 2 == 0 {
+            assert_eq!(
+                row[3],
+                json!({"type":"uri","value":"urn:commonplace:entity:1"})
+            );
+            assert_eq!(row[4], Value::Null);
+        } else {
+            assert_eq!(
+                row[3],
+                json!({"type":"literal","value":"approved",
+                "datatype":"http://www.w3.org/2001/XMLSchema#string","language":null})
+            );
+            assert_eq!(row[4]["value"], "\"approved\"");
+        }
+        if index < 2 {
+            assert_eq!(row[5], Value::Null);
+        } else {
+            assert_eq!(
+                row[5]["value"],
+                format!("urn:commonplace:{}", other_passage.as_str().unwrap())
+            );
+        }
+    }
     let query = "PREFIX c:<urn:commonplace:property:>
         SELECT ?k ?p WHERE {?k c:kind \"type_membership\" OPTIONAL {?k c:evidence ?p}} ORDER BY ?k";
     let graph = store.success(&["graph", "query", query])["result"].clone();
@@ -212,9 +283,20 @@ fn removes_all_revisions_retains_knowledge_unrelated_evidence_and_new_identity()
     let found = serde_json::to_value(found).unwrap();
     assert_eq!(found["items"].as_array().unwrap().len(), 1);
     assert_eq!(found["items"][0]["source_key"], "other:key");
+    let all_query = "SELECT ?s ?p ?o WHERE {?s ?p ?o} ORDER BY ?s ?p ?o";
+    let canonical_graph = store.success(&["graph", "query", all_query])["result"].clone();
+    assert_eq!(canonical_graph["truncated"], false);
     store.success(&["init"]);
     store.success(&["graph", "rebuild"]);
     assert_eq!(store.success(&["graph", "query", query])["result"], graph);
+    assert_eq!(
+        store.success(&["graph", "query", all_query])["result"],
+        canonical_graph
+    );
+    assert_eq!(
+        store.success(&["graph", "query", fact_query])["result"],
+        fact_graph
+    );
     let before = state(&store);
     store.failure(&["remove", "--source-key", "opaque:key"], "not_found", 2);
     assert_eq!(state(&store), before);
@@ -227,6 +309,25 @@ fn removes_all_revisions_retains_knowledge_unrelated_evidence_and_new_identity()
         json!([])
     );
     assert_eq!(store.success(&["graph", "query", query])["result"], graph);
+    assert_eq!(
+        store.success(&["graph", "query", all_query])["result"],
+        canonical_graph
+    );
+    assert_eq!(
+        store.success(&["graph", "query", fact_query])["result"],
+        fact_graph
+    );
+    for (index, before) in knowledge_before.iter().enumerate() {
+        let mut expected = before.clone();
+        expected["support"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|e| e["source_key"] != "opaque:key");
+        assert_eq!(
+            store.success(&["get", &format!("knowledge:{}", index + 1)])["result"],
+            expected
+        );
+    }
 }
 
 #[test]

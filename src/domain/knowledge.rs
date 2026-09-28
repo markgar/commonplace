@@ -2,8 +2,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::documents::Evidence;
-use super::ids::{EntityId, EntityTypeId, IdentifierSchemeId, KnowledgeItemId};
-use super::schema::Name;
+use super::ids::{EntityId, EntityTypeId, IdentifierSchemeId, KnowledgeItemId, PredicateId};
+use super::schema::{Name, ObjectKind};
 use crate::{CommonplaceError, Result};
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -78,6 +78,85 @@ pub enum RecordItem {
         #[schemars(length(max = 1000))]
         support: Vec<super::evidence::SupportInput>,
     },
+    Fact {
+        subject: EntityReference,
+        predicate: Name,
+        object: FactObjectInput,
+        #[serde(default)]
+        #[schemars(length(max = 1000))]
+        support: Vec<super::evidence::SupportInput>,
+    },
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum FactObjectInput {
+    Entity { entity: EntityReference },
+    Literal { literal: LiteralValue },
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(untagged)]
+pub enum LiteralValue {
+    String(String),
+    Integer(#[schemars(range(min = -9223372036854775808_i64, max = 9223372036854775807_i64))] i64),
+    Boolean(bool),
+}
+
+#[derive(Debug, Serialize)]
+pub struct CanonicalLiteral {
+    pub literal_kind: ObjectKind,
+    pub literal: LiteralValue,
+    pub literal_json: String,
+}
+
+impl CanonicalLiteral {
+    pub fn new(kind: ObjectKind, value: &LiteralValue) -> Result<Self> {
+        let literal = match (kind, value) {
+            (ObjectKind::String, LiteralValue::String(_))
+            | (ObjectKind::Integer, LiteralValue::Integer(_))
+            | (ObjectKind::Boolean, LiteralValue::Boolean(_)) => value.clone(),
+            (ObjectKind::Timestamp, LiteralValue::String(value)) => LiteralValue::String(
+                super::documents::normalize_timestamp(value).map_err(|error| {
+                    CommonplaceError::InvalidInput(format!("invalid timestamp literal: {error}"))
+                })?,
+            ),
+            _ => {
+                return Err(CommonplaceError::InvalidInput(format!(
+                    "literal must match predicate kind {}",
+                    kind.as_str()
+                )));
+            }
+        };
+        let literal_json = super::documents::canonical_json(&serde_json::to_value(&literal)?)?;
+        Ok(Self {
+            literal_kind: kind,
+            literal,
+            literal_json,
+        })
+    }
+
+    pub fn stored(kind: ObjectKind, json: &str) -> Result<Self> {
+        let value: LiteralValue = serde_json::from_str(json).map_err(|error| {
+            CommonplaceError::Storage(format!("invalid stored fact literal: {error}"))
+        })?;
+        let literal = Self::new(kind, &value).map_err(|error| {
+            CommonplaceError::Storage(format!("invalid stored fact literal: {error}"))
+        })?;
+        if literal.literal_json != json {
+            return Err(CommonplaceError::Storage(
+                "stored fact literal is not canonical JSON or normalized time".into(),
+            ));
+        }
+        Ok(literal)
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub enum FactObject {
+    Entity { entity_id: EntityId },
+    Literal(CanonicalLiteral),
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -140,13 +219,26 @@ pub struct Entity {
 #[derive(Debug, Serialize)]
 pub struct Knowledge {
     pub knowledge_id: KnowledgeItemId,
-    pub subtype: &'static str,
     pub schema_version: i64,
     pub created_at: String,
     pub created_by: Option<String>,
     pub withdrawn_at: Option<String>,
     pub withdrawn_by: Option<String>,
-    pub entity_id: EntityId,
-    pub entity_type_id: EntityTypeId,
+    #[serde(flatten)]
+    pub detail: KnowledgeDetail,
     pub support: Vec<Evidence>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "subtype", rename_all = "snake_case")]
+pub enum KnowledgeDetail {
+    TypeMembership {
+        entity_id: EntityId,
+        entity_type_id: EntityTypeId,
+    },
+    Fact {
+        subject_entity_id: EntityId,
+        predicate_id: PredicateId,
+        object: FactObject,
+    },
 }

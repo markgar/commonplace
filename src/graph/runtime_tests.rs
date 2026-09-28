@@ -36,18 +36,12 @@ fn snapshot_reads_callers_pending_transaction_not_another_connection() {
     let (_directory, root) = store();
     let mut writer = SqliteDatabase::write(&root, Duration::ZERO).unwrap();
     let transaction = writer.transaction().unwrap();
-    transaction.execute_batch(
-        "INSERT INTO entity_types VALUES (1,'person',NULL,1);
-         INSERT INTO entities VALUES (1,'Pending','2026-01-01T00:00:00Z',NULL);
-         INSERT INTO knowledge_items VALUES (1,'type_membership',1,'2026-01-01T00:00:00Z',NULL,NULL,NULL);
-         INSERT INTO entity_type_memberships VALUES (1,1,1);
-         UPDATE store_state SET schema_version=1,knowledge_version=1;"
-    ).unwrap();
+    pending(&transaction);
     let snapshot = GraphSnapshot::read(&transaction).unwrap();
     assert_eq!(snapshot.knowledge_version, 1);
     projection::build(&snapshot, &root.join("graph/candidate")).unwrap();
     let candidate = projection::open_verified(&root.join("graph/candidate"), 1).unwrap();
-    assert_eq!(candidate.len().unwrap(), 10);
+    assert_eq!(candidate.len().unwrap(), 30);
     let committed = SqliteDatabase::read(&root).unwrap();
     assert_eq!(graph_snapshot::version(committed.connection()).unwrap(), 0);
     drop(candidate);
@@ -207,6 +201,11 @@ fn pending(transaction: &Transaction<'_>) {
          INSERT INTO entities VALUES (1,'Pending','2026-01-01T00:00:00Z',NULL);
          INSERT INTO knowledge_items VALUES (1,'type_membership',1,'2026-01-01T00:00:00Z',NULL,NULL,NULL);
          INSERT INTO entity_type_memberships VALUES (1,1,1);
+         INSERT INTO predicates VALUES (1,'knows','entity',NULL,1),(2,'decision','string',NULL,1);
+         INSERT INTO predicate_entity_types VALUES (1,'subject',1),(1,'object',1),(2,'subject',1);
+         INSERT INTO knowledge_items VALUES (2,'fact',1,'2026-01-01T00:00:00Z',NULL,NULL,NULL),
+           (3,'fact',1,'2026-01-01T00:00:00Z',NULL,NULL,NULL);
+         INSERT INTO facts VALUES (2,1,1,1,NULL),(3,1,2,NULL,'\"approved\"');
          UPDATE store_state SET schema_version=1,knowledge_version=1;"
     ).unwrap();
 }
@@ -245,7 +244,10 @@ fn removal_store() -> (tempfile::TempDir, std::path::PathBuf) {
     )
     .unwrap();
     transaction
-        .execute("INSERT INTO knowledge_item_evidence VALUES (1,1)", [])
+        .execute(
+            "INSERT INTO knowledge_item_evidence VALUES (1,1),(2,1),(3,1)",
+            [],
+        )
         .unwrap();
     transaction.commit().unwrap();
     drop(writer);
@@ -271,17 +273,17 @@ fn removal_publication_failures_rollback_indexes_evidence_and_restore_or_fail_cl
         let mut writer = SqliteDatabase::write(&root, Duration::ZERO).unwrap();
         let transaction = writer.transaction().unwrap();
         let removed = crate::storage::documents::remove(&transaction, "source").unwrap();
-        assert_eq!(removed.detached_evidence, 1);
+        assert_eq!(removed.detached_evidence, 3);
         transaction
             .execute("UPDATE store_state SET knowledge_version=2", [])
             .unwrap();
-        let receipt = "remove committed at knowledge_version 2 (removed doc:1 with source_key \"source\"; affected knowledge: [knowledge:1])";
+        let receipt = "remove committed at knowledge_version 2 (removed doc:1 with source_key \"source\"; affected knowledge: [knowledge:1, knowledge:2, knowledge:3])";
         let error = publish_with(
             &root, &transaction, Duration::ZERO, receipt, crate::app::remove::RECOVERY_GUIDANCE,
             |at, tx| {
                 if at == PublishPhase::AfterBuild {
                     let candidate = projection::open_verified(&graph.join("candidate"), 2)?;
-                    assert_eq!(candidate.len().unwrap(), 10);
+                    assert_eq!(candidate.len().unwrap(), 30);
                     assert_eq!(committed_version(&root), 1);
                 }
                 if at == phase || (phase == PublishPhase::BeforeRestore && at == PublishPhase::BeforeCommit) {
@@ -332,19 +334,31 @@ fn removal_publication_failures_rollback_indexes_evidence_and_restore_or_fail_cl
                     row.get(0)
                 })
                 .unwrap();
-            assert_eq!(count, i64::from(!committed), "{phase:?}: {table}");
+            let expected = i64::from(!committed)
+                * if table == "knowledge_item_evidence" {
+                    3
+                } else {
+                    1
+                };
+            assert_eq!(count, expected, "{phase:?}: {table}");
         }
-        let knowledge = crate::storage::knowledge::knowledge(
-            session.connection(),
-            crate::domain::ids::KnowledgeItemId::new(1).unwrap(),
-        )
-        .unwrap();
-        let knowledge = serde_json::to_value(knowledge).unwrap();
-        assert_eq!(knowledge["withdrawn_at"], serde_json::Value::Null);
-        assert_eq!(
-            knowledge["support"].as_array().unwrap().len(),
-            usize::from(!committed)
-        );
+        for id in 1..=3 {
+            let knowledge = crate::storage::knowledge::knowledge(
+                session.connection(),
+                crate::domain::ids::KnowledgeItemId::new(id).unwrap(),
+            )
+            .unwrap();
+            let knowledge = serde_json::to_value(knowledge).unwrap();
+            assert_eq!(knowledge["withdrawn_at"], serde_json::Value::Null);
+            assert_eq!(
+                knowledge["support"].as_array().unwrap().len(),
+                usize::from(!committed)
+            );
+            assert_eq!(
+                knowledge["subtype"],
+                if id == 1 { "type_membership" } else { "fact" }
+            );
+        }
         drop(session);
         if phase == PublishPhase::BeforeRestore {
             assert!(error.to_string().contains("restoration failed"));
@@ -385,7 +399,7 @@ fn coordinated_build_activation_and_real_commit_failures_restore_old_state() {
             |at, tx| {
                 if at == PublishPhase::AfterBuild {
                     let candidate = projection::open_verified(&graph.join("candidate"), 1)?;
-                    assert_eq!(candidate.len().unwrap(), 10);
+                    assert_eq!(candidate.len().unwrap(), 30);
                     assert_eq!(committed_version(&root), 0);
                 }
                 if at == phase {
@@ -414,6 +428,13 @@ fn coordinated_build_activation_and_real_commit_failures_restore_old_state() {
         drop(transaction);
         drop(writer);
         assert_eq!(committed_version(&root), 0);
+        let read = SqliteDatabase::read(&root).unwrap();
+        let facts: i64 = read
+            .connection()
+            .query_row("SELECT count(*) FROM facts", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(facts, 0);
+        drop(read);
         assert_eq!(bytes(&graph.join("current")), before);
         assert!(!graph.join("candidate").exists());
         assert!(!graph.join("previous").exists());
@@ -465,7 +486,7 @@ fn all_post_commit_cleanup_errors_preserve_committed_receipt_and_current() {
             &root,
             &transaction,
             Duration::ZERO,
-            "record committed at knowledge_version 1 (entity:1, knowledge:1)",
+            "record committed at knowledge_version 1 (entity:1, knowledge:1, knowledge:2, knowledge:3)",
             crate::app::record::RECOVERY_GUIDANCE,
             |at, _| {
                 if at == phase {
@@ -479,14 +500,34 @@ fn all_post_commit_cleanup_errors_preserve_committed_receipt_and_current() {
         assert!(
             error
                 .to_string()
-                .contains("knowledge_version 1 (entity:1, knowledge:1)")
+                .contains("knowledge_version 1 (entity:1, knowledge:1, knowledge:2, knowledge:3)")
         );
         assert!(error.to_string().contains("Do not retry record"));
         assert!(transaction.is_autocommit());
         drop(transaction);
         drop(writer);
         assert_eq!(committed_version(&root), 1);
-        GraphRuntime::open(&root).unwrap();
+        let read = SqliteDatabase::read(&root).unwrap();
+        let fact = crate::storage::knowledge::knowledge(
+            read.connection(),
+            crate::domain::ids::KnowledgeItemId::new(3).unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            fact.detail,
+            crate::domain::knowledge::KnowledgeDetail::Fact { .. }
+        ));
+        assert!(fact.support.is_empty());
+        drop(read);
+        let graph = GraphRuntime::open(&root).unwrap();
+        let facts = graph
+            .query(
+                "SELECT ?k WHERE {?k <urn:commonplace:property:kind> \"fact\"}",
+                QueryConfig::default(),
+            )
+            .unwrap();
+        assert_eq!(facts.rows.len(), 2);
+        drop(graph);
         rebuild(&root, Duration::ZERO).unwrap();
         assert_eq!(committed_version(&root), 1);
     }

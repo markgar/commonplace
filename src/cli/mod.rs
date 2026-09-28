@@ -54,7 +54,7 @@ enum Command {
         #[arg(long, default_value_t = crate::domain::search::DEFAULT_RESULT_LIMIT)]
         limit: usize,
     },
-    /// Atomically record entities, metadata, and cited types from JSON (not facts/JSONL).
+    /// Atomically record entities, metadata, cited types and facts from JSON or JSONL.
     Record(record::RecordArgs),
     /// Permanently delete one source's stored evidence, retaining authored knowledge and source files.
     Remove(remove::RemoveArgs),
