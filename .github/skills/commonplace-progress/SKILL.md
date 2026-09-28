@@ -58,15 +58,25 @@ Every implementation packet needs an independent `rubber-duck` agent review
 before the coordinator approves its plan or the owner starts implementation.
 The author's self-review and the coordinator's contract review do not replace it.
 
+This is a blocker-only review: "Will this plan fail to deliver the approved
+slice?" It is not an opportunity to redesign or expand the slice.
+
 - Run the review in the owning subsession, using a separate agent context. Give
   the reviewer the concrete plan, approved scope and decisions, relevant
   specifications, and existing code to inspect, not just a summary of the plan.
-- Ask the reviewer to challenge correctness, failure handling, invariants,
-  acceptance coverage, shared-file interactions, and unnecessary scope. Keep the
-  review bounded to the packet; do not create another implementation session.
+- Report only concrete blockers to the approved acceptance criteria or existing
+  invariants. Each finding must identify the failure scenario, supporting
+  code/specification evidence, and the smallest in-scope correction. Missing
+  coverage is a blocker only when it leaves required acceptance unverified.
+- Do not request new features, speculative future-proofing, optional refactors,
+  style changes, or broader test/platform matrices. Do not turn hypothetical
+  concerns into requirements. If there are no supported blockers, report that
+  and stop; do not fill the review with optional suggestions.
 - Investigate each finding against the code and owning specification. Record
   whether it was fixed, rejected with a reason, or explicitly deferred. Findings
-  are questions to resolve, not automatic permission to expand scope.
+  are questions to resolve, not automatic permission to expand scope. If a real
+  blocker cannot be fixed within scope, report it to the coordinator for a
+  decision rather than silently adding work.
 - Report the reviewer identity or agent ID, findings, dispositions, and revised
   plan location to the coordinator. Link that evidence from the packet issue.
   Resolve blocking findings before requesting native plan approval. If the
