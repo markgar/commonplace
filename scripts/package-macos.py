@@ -72,6 +72,7 @@ def main():
 
     metadata = json.loads(run(SANDBOX + [
         "cargo", "metadata", "--locked", "--offline", "--format-version", "1",
+        "--filter-platform", "aarch64-apple-darwin",
     ], env))
     packages = {p["name"]: p for p in metadata["packages"]}
     ort_source = Path(packages["ort-sys"]["manifest_path"]).parent
