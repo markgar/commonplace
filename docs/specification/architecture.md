@@ -359,7 +359,7 @@ begin SQLite transaction
 If graph construction or activation fails, SQLite rolls back. If SQLite commit
 reports failure, the graph engine restores the previous graph. A process crash
 during finalization may leave a version mismatch; graph reads detect the mismatch
-and refuse results. `kg graph rebuild` restores the derived graph from committed
+and refuse results. `commonplace graph rebuild` restores the derived graph from committed
 SQLite state. There is no automatic crash repair, generation selection, orphan
 cleanup protocol, or general transaction coordinator.
 
@@ -382,7 +382,7 @@ clear busy or conflict error and can rerun.
 
 A separate graph publication lock protects graph-file lifetime. A graph query
 holds it in shared mode from opening the graph through closing its result.
-Activation, rollback, cleanup, and `kg graph rebuild` hold it exclusively.
+Activation, rollback, cleanup, and `commonplace graph rebuild` hold it exclusively.
 Candidate construction occurs before acquiring the exclusive lock.
 
 Embedding and reranking never run while a SQLite write transaction is held.
@@ -413,7 +413,7 @@ The first two return their input JSON Schema and a minimal example.
 types, predicates, endpoint rules, literal kinds, and schema version. The CLI
 serializes these descriptions rather than maintaining duplicate schemas.
 
-`kg get ID` dispatches a tagged document, revision, passage, entity, or
+`commonplace get ID` dispatches a tagged document, revision, passage, entity, or
 knowledge-item ID to the corresponding indexed SQLite read.
 
 ## 10. Errors

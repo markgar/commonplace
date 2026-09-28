@@ -89,12 +89,12 @@ URI.
 The CLI supports:
 
 ```sh
-kg ingest document.md
-kg ingest document-a.md document-b.md
-kg ingest ./notes --recursive
-kg ingest --stdin --source-key teams/message/123
-kg ingest --jsonl documents.jsonl
-kg ingest --manifest corpus.json
+commonplace ingest document.md
+commonplace ingest document-a.md document-b.md
+commonplace ingest ./notes --recursive
+commonplace ingest --stdin --source-key teams/message/123
+commonplace ingest --jsonl documents.jsonl
+commonplace ingest --manifest corpus.json
 ```
 
 Direct file and directory inputs accept Markdown and plain UTF-8 text. Their
@@ -160,7 +160,7 @@ workflow, and no per-document derived-search fingerprint.
 Removal is explicit:
 
 ```sh
-kg remove --source-key notes/obsolete.md
+commonplace remove --source-key notes/obsolete.md
 ```
 
 The command permanently deletes one document, all of its revisions and
@@ -168,7 +168,7 @@ passages, lexical and vector rows, and evidence links. It reports detached
 evidence counts and affected knowledge IDs, rebuilds the graph, and publishes
 the SQLite and graph change as one coordinated operation. A process crash in
 the publication window is detected by version mismatch and repaired with
-`kg graph rebuild`.
+`commonplace graph rebuild`.
 
 Directory absence never implies deletion. Reingesting a removed source key
 creates a new document identity. There is no batch removal, restore, tombstone,
@@ -195,7 +195,7 @@ Each passage stores:
 
 ## 5. Hybrid search
 
-`kg search` performs one complete retrieval workflow:
+`commonplace search` performs one complete retrieval workflow:
 
 ```text
 query
@@ -258,9 +258,9 @@ interpret all stored knowledge.
 Schema operations include validation without mutation:
 
 ```sh
-kg schema apply schema.json --check --json
-kg schema apply schema.json --json
-kg schema show --json
+commonplace schema apply schema.json --check --json
+commonplace schema apply schema.json --json
+commonplace schema show --json
 ```
 
 Schema application changes SQLite only. It does not rebuild Grafeo because the
@@ -287,7 +287,7 @@ the system does not silently merge entities.
 
 A bare identified entity may exist in SQLite before its types or relationships
 are known. It becomes graph-active only when it participates in an active type
-membership or fact. `kg record` may add or remove aliases and identifiers
+membership or fact. `commonplace record` may add or remove aliases and identifiers
 atomically. Removal identifies the entity by canonical ID and does not merge or
 delete entities. Entity and metadata creation may carry an informational
 `created_by` label, which has no authorization or lifecycle semantics. Metadata
@@ -326,15 +326,15 @@ rules.
 
 ### 7.3 Atomic authoring
 
-A `kg record` request may create or resolve entities, correct metadata, add type
+A `commonplace record` request may create or resolve entities, correct metadata, add type
 memberships, add facts, attach evidence, and publish a new graph when projected
 knowledge changes. The entire request succeeds or fails as one operation.
 
 Authoring is batch-first:
 
 ```sh
-kg record facts.json --json
-kg record --jsonl facts.jsonl --json
+commonplace record facts.json --json
+commonplace record --jsonl facts.jsonl --json
 ```
 
 One request may declare request-local entity names and reuse them across several
@@ -353,7 +353,7 @@ Validation includes:
 
 ### 7.4 Withdrawal and history
 
-`kg withdraw` marks one active knowledge item withdrawn and republishes the
+`commonplace withdraw` marks one active knowledge item withdrawn and republishes the
 graph. Withdrawn items remain readable from SQLite history but are absent from
 the active graph.
 
@@ -400,7 +400,7 @@ supporting active knowledge and their documents are projected. Uncited corpus
 passages remain searchable in SQLite. Ordinary document ingestion does not
 rebuild Grafeo; source removal does because it can remove projected evidence.
 Only entity types and predicates referenced by active knowledge are projected;
-the complete vocabulary remains available through `kg schema show`.
+the complete vocabulary remains available through `commonplace schema show`.
 
 The complete logical shape is therefore:
 
@@ -418,13 +418,13 @@ graph before publishing it. Graph reads compare the graph's
 `knowledge_version` with SQLite and fail closed on mismatch.
 
 A crash in the narrow interval between graph activation and SQLite commit can
-leave a version mismatch. `kg graph rebuild` acquires the writer and graph
+leave a version mismatch. `commonplace graph rebuild` acquires the writer and graph
 publication locks, builds a complete candidate from committed SQLite state,
 verifies it, and activates it without changing `knowledge_version`. Failure
 leaves the previous graph untouched. There is no automatic repair, retained
 graph-generation system, or general transaction coordinator.
 
-`kg graph query` accepts read-only Cypher through a native Grafeo
+`commonplace graph query` accepts read-only Cypher through a native Grafeo
 `Role::ReadOnly` session. Mutation clauses are rejected by the graph engine
 rather than filtered only by string matching. Grafeo's native query deadline
 enforces the configured time budget, although cancellation may occur after the
@@ -452,27 +452,27 @@ The command line is the only stable programmatic interface. Commands return mach
 Primary commands are:
 
 ```text
-kg init
-kg ingest
-kg remove
-kg search
-kg schema show
-kg schema apply
-kg record
-kg withdraw
-kg get
-kg graph schema
-kg graph query
-kg graph rebuild
+commonplace init
+commonplace ingest
+commonplace remove
+commonplace search
+commonplace schema show
+commonplace schema apply
+commonplace record
+commonplace withdraw
+commonplace get
+commonplace graph schema
+commonplace graph query
+commonplace graph rebuild
 ```
 
-`kg init` creates the SQLite database, Grafeo storage location, and local
+`commonplace init` creates the SQLite database, Grafeo storage location, and local
 configuration for one knowledge base. It does not create model profiles,
 approval state, cache profiles, or a separate model-preparation workflow.
 Pinned models load on first use and may be obtained through the selected
 runtime's standard cache mechanism.
 
-`kg get ID` is the only direct authoritative read command. It accepts tagged
+`commonplace get ID` is the only direct authoritative read command. It accepts tagged
 document, revision, passage, entity, and knowledge-item IDs. Document results
 include revision IDs; revision results include complete stored text and metadata;
 passage results include their exact citation; entity results include active type
@@ -481,28 +481,28 @@ withdrawal state. Withdrawn knowledge remains readable by ID. There is no
 generic history mode, centered-context read, semantic revision comparison, or
 separate noun-specific read command.
 
-`kg get` returns the complete requested record, including all referenced IDs,
+`commonplace get` returns the complete requested record, including all referenced IDs,
 and does not silently truncate authoritative state. Existing source-size and
 per-request write limits bound individual stored values; cumulative revision
 and entity histories may grow with use.
 
-`kg schema show` returns the complete user vocabulary from SQLite.
-`kg graph schema` returns the stable physical graph shape, canonical property
+`commonplace schema show` returns the complete user vocabulary from SQLite.
+`commonplace graph schema` returns the stable physical graph shape, canonical property
 names, evidence fields, and example read-only Cypher patterns. Standard
 `--help`, these two schema commands, and generated input descriptions replace a
-general `kg capabilities` command.
+general `commonplace capabilities` command.
 
 Complex JSON boundaries describe themselves:
 
 ```sh
-kg ingest --describe --json
-kg schema apply --describe --json
-kg record --describe --json
-kg graph schema --json
+commonplace ingest --describe --json
+commonplace schema apply --describe --json
+commonplace record --describe --json
+commonplace graph schema --json
 ```
 
 Descriptions are generated from the validators used by execution and include an
-input JSON Schema plus a minimal valid example. `kg record --describe` also
+input JSON Schema plus a minimal valid example. `commonplace record --describe` also
 includes current entity types, predicates, endpoint rules, literal kinds, and
 schema version. The project does not maintain a second hand-written contract
 model.

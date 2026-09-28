@@ -4,7 +4,25 @@ A local, evidence-backed knowledge system.
 
 Commonplace is a lean personal knowledge tool for batch document ingestion,
 hybrid SQLite search, explicitly authored cited knowledge, and local graph
-queries. The project is currently in design; no implementation has shipped.
+queries.
+
+The Rust implementation begins with a working store-initialization slice:
+
+```sh
+cargo run --bin commonplace -- --store .commonplace init
+```
+
+The command creates the SQLite schema, FTS5 and sqlite-vec indexes, and the
+derived Grafeo storage location. It is safe to rerun against a compatible
+initialized store.
+
+Development checks:
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-targets --all-features
+```
 
 ## Design documents
 
