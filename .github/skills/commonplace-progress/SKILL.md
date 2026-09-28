@@ -1,13 +1,17 @@
 ---
 name: commonplace-progress
-description: Track Commonplace implementation packets and coordinate build handoffs. Use when starting or resuming a packet, reporting build progress, updating blockers or review readiness, handing work to another session, or verifying integration.
+description: Plan and coordinate Commonplace implementation packets, parallel builds, and subsessions. Use for implementation planning, kicking off or resuming packets, orchestrating child sessions, independent rubber-duck plan review, approving plans, reporting progress, updating blockers, review handoffs, and verifying integration.
 ---
 
-# Commonplace build progress
+# Commonplace packet planning and coordination
 
-Use this repo-local workflow for `/commonplace-progress`, a packet kickoff, or a
-progress/handoff request. It is a procedure, not a background monitor. Do not
-create automations, new sessions, issues, or PRs merely to report status.
+Use this repo-local workflow for `/commonplace-progress`, implementation planning,
+parallel packet or subsession work, plan approval, and progress/handoff requests.
+It complements the generic `orchestrate` skill: that skill handles session
+mechanics; this one owns the repository's packet workflow. If the client has not
+discovered this skill, read this file directly before proceeding. It is a
+procedure, not a background monitor. Do not create automations, new sessions,
+issues, or PRs merely to report status.
 
 ## Sources of truth
 
@@ -44,8 +48,45 @@ never silently let the child implement an older contract.
 
 Every child kickoff must include: packet issue, specification index and relevant
 sections, approved revision/base, dependencies, owned surfaces, smallest complete
-acceptance outcome, local-only checks, approval boundaries, and report-back
-instructions. Every child must read those sources, not rely only on the prompt.
+acceptance outcome, local-only checks, approval boundaries, the independent
+plan-review gate below, and report-back instructions. Every child must read those
+sources, not rely only on the prompt.
+
+## Independent plan review before implementation
+
+Every implementation packet needs an independent `rubber-duck` agent review
+before the coordinator approves its plan or the owner starts implementation.
+The author's self-review and the coordinator's contract review do not replace it.
+
+This is a blocker-only review: "Will this plan fail to deliver the approved
+slice?" It is not an opportunity to redesign or expand the slice.
+
+- Run the review in the owning subsession, using a separate agent context. Give
+  the reviewer the concrete plan, approved scope and decisions, relevant
+  specifications, and existing code to inspect, not just a summary of the plan.
+- Report only concrete blockers to the approved acceptance criteria or existing
+  invariants. Each finding must identify the failure scenario, supporting
+  code/specification evidence, and the smallest in-scope correction. Missing
+  coverage is a blocker only when it leaves required acceptance unverified.
+- Do not request new features, speculative future-proofing, optional refactors,
+  style changes, or broader test/platform matrices. Do not turn hypothetical
+  concerns into requirements. If there are no supported blockers, report that
+  and stop; do not fill the review with optional suggestions.
+- Investigate each finding against the code and owning specification. Record
+  whether it was fixed, rejected with a reason, or explicitly deferred. Findings
+  are questions to resolve, not automatic permission to expand scope. If a real
+  blocker cannot be fixed within scope, report it to the coordinator for a
+  decision rather than silently adding work.
+- Report the reviewer identity or agent ID, findings, dispositions, and revised
+  plan location to the coordinator. Link that evidence from the packet issue.
+  Resolve blocking findings before requesting native plan approval. If the
+  reviewer is unavailable, report the blocker rather than skipping the gate.
+- The coordinator reads the review and final plan before approving implementation.
+  If a paused plan must return to planning for review, reject it with that scoped
+  instruction instead of approving implementation to unblock the reviewer.
+- Reuse the reviewer for material plan changes affecting the reviewed decisions;
+  do not repeat reviews for unchanged plans or minor wording edits. Plan approval
+  does not replace implementation review or combined acceptance before merging.
 
 ## Maintain the issue, not another tracker
 
