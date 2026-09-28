@@ -1,6 +1,6 @@
 ---
 name: commonplace-progress
-description: Plan and coordinate Commonplace implementation packets, parallel builds, and subsessions. Use for implementation planning, kicking off or resuming packets, orchestrating child sessions, independent rubber-duck plan review, approving plans, reporting progress, updating blockers, review handoffs, and verifying integration.
+description: Plan and coordinate Commonplace implementation packets, parallel builds, and subsessions. Use for implementation planning, kicking off or resuming packets, orchestrating child sessions, independent rubber-duck plan review, approving plans, delegated implementation review, reporting progress, updating blockers, review handoffs, and verifying integration.
 ---
 
 # Commonplace packet planning and coordination
@@ -49,7 +49,7 @@ never silently let the child implement an older contract.
 Every child kickoff must include: packet issue, specification index and relevant
 sections, approved revision/base, dependencies, owned surfaces, smallest complete
 acceptance outcome, local-only checks, isolated build-output directory, approval
-boundaries, the independent plan-review gate below, and report-back instructions.
+boundaries, the review gates below, and report-back instructions.
 Every child must read those sources, not rely only on the prompt.
 
 ## Isolate build output per worktree
@@ -102,6 +102,28 @@ slice?" It is not an opportunity to redesign or expand the slice.
 - Reuse the reviewer for material plan changes affecting the reviewed decisions;
   do not repeat reviews for unchanged plans or minor wording edits. Plan approval
   does not replace implementation review or combined acceptance before merging.
+
+## Implementation review in a separate context
+
+- Delegate feature-packet code review to a `general-purpose` agent in a separate
+  context, normally one reviewer per PR. Keep small documentation-only reviews
+  direct. This is distinct from the earlier `rubber-duck` plan review.
+- Give the reviewer the exact PR head and integration base, approved scope and
+  decisions, owning specifications, and acceptance evidence. The reviewer reads
+  the actual code and tests, read-only; it does not edit, merge, or spawn more
+  reviewers.
+- Apply the same blocker-only standard above. Return concise findings with
+  file/line references, a concrete failure scenario, and the smallest in-scope
+  fix, or explicitly report no blocking findings. Do not copy large code excerpts
+  or exploration logs into the coordinator's context.
+- The coordinator owns decisions, acceptance checks, integration, and merge.
+  Do not duplicate the delegated full-code review in the coordinator session;
+  inspect only the focused evidence needed to resolve findings. While review
+  runs, independent acceptance against a source-associated binary can continue.
+- Send supported findings to the existing implementation owner. Reuse the
+  reviewer for relevant fixes or integration changes rather than launching
+  repeated full reviews. Record the reviewed head and dispositions in the packet
+  issue; verify the final head and combined acceptance before merging.
 
 ## Maintain the issue, not another tracker
 
