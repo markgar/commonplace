@@ -9,8 +9,8 @@ knowledge, and reproduce the same results after reopening the application.
 
 ## 2. Technology gate
 
-Before production implementation, a disposable Rust spike must prove that the
-selected components can ship together as a self-contained distribution:
+Before release packaging, a disposable Rust spike must prove that the selected
+components can ship together as a self-contained distribution:
 
 - Grafeo 0.5.43 with the `lpg` feature profile;
 - SQLite with FTS5;
@@ -44,11 +44,13 @@ The selected vector extension must demonstrate:
 Failure of a required component reopens that component or the implementation
 language choice. It does not introduce parallel backends.
 
-The completed macOS arm64 technology-gate evidence and pinned selections are
-recorded in [the Rust packaging spike](../spikes/rust-packaging.md). The
-cross-platform graph-engine evaluation, including an independent Windows x64
-package test, is recorded in
-[the Grafeo evaluation spike](../spikes/grafeo-evaluation.md).
+Component feasibility is established but the integrated gate remains open. The
+[Rust packaging spike](../spikes/rust-packaging.md) proves SQLite, sqlite-vec,
+inference, reranking, and the superseded Ladybug engine together on macOS
+arm64. The [Grafeo evaluation spike](../spikes/grafeo-evaluation.md) proves the
+selected graph engine separately on every intended OS and architecture. The
+packaging slice must replace Ladybug with Grafeo and rerun the complete bundle
+before release.
 
 ## 3. Implementation sequence
 
@@ -73,8 +75,8 @@ package test, is recorded in
 
 5. **Schema and entity slice**
 
-   Add vocabulary application, identifiers, aliases, exact entity resolution,
-   and multiple active entity types.
+   Add vocabulary application, correctable identifiers and aliases, exact
+   entity resolution, and multiple active entity types.
 
 6. **Knowledge slice**
 
@@ -84,7 +86,8 @@ package test, is recorded in
 7. **Graph slice**
 
    Add deterministic snapshot construction, Grafeo integration,
-   version checks, citation projection, read-only Cypher, and graph schema.
+   version checks, citation projection, read-only Cypher, graph rebuild, and
+   graph schema.
 
 8. **Removal slice**
 
@@ -162,9 +165,14 @@ A release candidate must pass this sequence from an empty store:
 ### Ingestion and evidence
 
 - One embedding-model load serves a multi-document command.
-- At least one bounded embedding call contains passages from multiple documents.
+- Embedding batches remain within the configured bound.
 - A failed document does not roll back successful documents in the same batch.
+- A malformed JSON Lines record or repeated streamed source key fails that item
+  without rolling back earlier documents.
+- Direct and directory ingestion of the same file use the same canonical source
+  key.
 - FTS and vector results correlate exactly by `passage_id`.
+- FTS and vector row IDs equal the current searchable passage IDs.
 - Every citation selects the exact UTF-8 byte range from its revision.
 - Changed metadata creates a new revision even when source text is unchanged.
 - Missing files during directory ingestion do not delete stored sources.
@@ -181,12 +189,13 @@ A release candidate must pass this sequence from an empty store:
 ### Knowledge
 
 - Schema application is additive and atomic.
+- An endpoint-only schema change increments `schema_version` once.
 - Entities may hold multiple active types.
 - Identifier uniqueness and ambiguous name resolution are enforced.
 - Evidence quote and offset mismatches reject the whole authoring request.
 - Validation or graph-build failure rolls back the whole request.
 - Duplicate successful knowledge writes receive distinct IDs.
-- Aliases and identifiers remain add-only.
+- Alias and identifier corrections are atomic and require a canonical entity ID.
 - Withdrawal is atomic and retained in history.
 
 ### Graph
@@ -196,6 +205,8 @@ A release candidate must pass this sequence from an empty store:
 - Ordinary document ingestion does not rebuild the graph.
 - Evidence can be traversed directly from knowledge to passage and source.
 - Graph and SQLite versions must match before query execution.
+- A version mismatch is recoverable with `kg graph rebuild`.
+- Graph publication cannot replace files held by an active graph reader.
 - Cypher mutations are rejected natively.
 - Row limits are enforced.
 - An over-budget query returns Grafeo's native timeout error.
@@ -208,6 +219,7 @@ A release candidate must pass this sequence from an empty store:
 - Foreign keys and `STRICT` tables are active on every connection.
 - The process-level writer lock works on every supported platform.
 - Incompatible store formats are rejected without mutation.
+- Rows written by one operation share one application-supplied timestamp.
 - The packaged executable loads SQLite extensions and Grafeo on a clean target.
 - Commands that do not use inference do not load model weights.
 - Source text never leaves the local inference path.

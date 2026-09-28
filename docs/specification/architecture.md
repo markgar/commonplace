@@ -92,7 +92,7 @@ src/
   graph/
     mod.rs
     snapshot.rs
-    ladybug.rs
+    grafeo.rs
   adapters/
     mod.rs
     sources.rs
@@ -211,9 +211,10 @@ There are no provider registries or runtime profile selectors.
 
 `GraphRuntime` owns the active Grafeo resource for a CLI process.
 It manages one current graph path and one temporary candidate path. Opening the
-current graph verifies its stored `knowledge_version` against SQLite before
-returning a query handle. Candidate creation, activation, rollback, and cleanup
-remain private to this boundary.
+current graph occurs under the shared graph publication lock and verifies its
+stored `knowledge_version` against SQLite before returning a query handle.
+Candidate creation, activation, rollback, and cleanup remain private to this
+boundary.
 
 ### 5.4 Application context
 
@@ -238,9 +239,14 @@ infrastructure without embedding SQL or CLI serialization.
 ingest_documents(context, document_stream)
 ```
 
-The workflow validates the batch, resolves current revisions, skips unchanged
-documents, prepares passages, batches embedding work across documents, and
-publishes each changed document in its own SQLite transaction.
+The workflow validates command-level input, streams documents, resolves current
+revisions, skips unchanged documents, prepares passages, and publishes each
+changed document in its own SQLite transaction. Embedding uses bounded batches;
+combining passages from multiple documents is an optional optimization.
+
+A malformed JSON Lines record or source key repeated earlier in the same stream
+is a failed item. It does not roll back documents already published by that
+command.
 
 Within a document transaction it writes the document revision, passages, FTS
 rows, and vector rows. When replacing the current revision, it explicitly
@@ -285,8 +291,10 @@ record_knowledge(context, request)
 ```
 
 The workflow resolves entities and evidence, validates the complete request,
-writes entity metadata and knowledge items, increments `knowledge_version`,
-builds and activates a candidate graph, and commits as one operation.
+writes entity metadata corrections and knowledge items, increments
+`knowledge_version` when projected knowledge changes, builds and activates a
+candidate graph when needed, and commits as one operation. Alias and identifier
+removals require the canonical entity ID and do not rebuild the graph.
 
 ### 6.6 Withdraw knowledge
 
@@ -295,7 +303,8 @@ withdraw_knowledge(context, request)
 ```
 
 The workflow validates that the item exists and is active, marks it withdrawn,
-increments `knowledge_version`, rebuilds the graph, and commits atomically.
+increments `knowledge_version`, rebuilds the graph, and commits as one
+coordinated operation with version-mismatch recovery.
 
 ### 6.7 Read records and query the graph
 
@@ -308,6 +317,10 @@ stops after `row_limit + 1` rows to detect truncation and serializes supported
 graph values deterministically. The synchronous CLI process terminates on
 Ctrl+C; the architecture does not promise cancellation of one query while
 keeping the process alive.
+
+`rebuild_graph` acquires the writer lock, reads a complete snapshot from
+committed SQLite state, builds and verifies a candidate graph, and publishes it
+without changing `knowledge_version`.
 
 ## 7. Transaction and publication model
 
@@ -336,26 +349,27 @@ begin SQLite transaction
   -> increment knowledge_version
   -> read complete graph snapshot
   -> build and verify candidate graph
+  -> acquire exclusive graph publication lock
   -> activate candidate, retaining previous graph
   -> commit SQLite
   -> discard previous graph
+  -> release graph publication lock
 ```
 
 If graph construction or activation fails, SQLite rolls back. If SQLite commit
 reports failure, the graph engine restores the previous graph. A process crash
 during finalization may leave a version mismatch; graph reads detect the mismatch
-and refuse results. The supported recovery is a fresh store and reingestion.
-There is no automatic crash repair, public graph-rebuild command, generation
-selection, orphan cleanup protocol, or general transaction coordinator.
+and refuse results. `kg graph rebuild` restores the derived graph from committed
+SQLite state. There is no automatic crash repair, generation selection, orphan
+cleanup protocol, or general transaction coordinator.
 
 ## 8. Concurrency
 
 The application supports concurrent read sessions and one process-level writer.
-Write commands acquire an explicit lock before opening a write transaction.
-SQLite uses WAL for ordinary read/write coexistence, and graph construction uses
-one graph-build lock.
+Write commands acquire an explicit writer lock before opening a write
+transaction. SQLite uses WAL for ordinary read/write coexistence.
 
-The lock:
+The writer lock:
 
 - covers source publication and knowledge-changing workflows;
 - has bounded acquisition time;
@@ -365,6 +379,11 @@ The lock:
 
 When writers contend, one waits for the bounded lock interval or receives a
 clear busy or conflict error and can rerun.
+
+A separate graph publication lock protects graph-file lifetime. A graph query
+holds it in shared mode from opening the graph through closing its result.
+Activation, rollback, cleanup, and `kg graph rebuild` hold it exclusively.
+Candidate construction occurs before acquiring the exclusive lock.
 
 Embedding and reranking never run while a SQLite write transaction is held.
 Ingestion computes passages and embeddings first, then opens a short transaction
@@ -412,10 +431,12 @@ Errors are typed by responsibility:
 
 Infrastructure translates SQLite, model, and Grafeo failures once at its
 boundary. The CLI maps typed errors to stable JSON codes, actionable messages,
-and exit codes. Whole-command structural errors fail before item processing.
-Document batches may report per-item errors and `partial`; schema, knowledge,
-and withdrawal requests return one success or failure for the complete request.
-Workflows do not catch broad errors or return success-shaped fallbacks.
+and exit codes. Invalid command options and manifest envelopes fail before item
+processing. JSON Lines parse errors, duplicate streamed source keys, and
+document failures are per-item errors and may produce `partial`; schema,
+knowledge, and withdrawal requests return one success or failure for the
+complete request. Workflows do not catch broad errors or return success-shaped
+fallbacks.
 
 ## 11. Configuration
 
