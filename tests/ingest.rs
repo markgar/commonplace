@@ -481,7 +481,7 @@ fn public_binary_file_commands_and_descriptions_need_no_model_for_empty_sources(
     assert_eq!(revision["result"]["occurred_at"], "2026-01-01T00:00:00Z");
     assert_eq!(revision["result"]["passage_ids"], json!([]));
     store.failure(&["get", "revision:9999"], "not_found", 2);
-    store.failure(&["get", "entity:1"], "invalid_input", 2);
+    store.failure(&["get", "entity:1"], "not_found", 2);
     store.failure(
         &["ingest", a.to_str().unwrap(), "--metadata", "{\"x\":1.5}"],
         "invalid_input",

@@ -19,6 +19,8 @@ pub enum CommonplaceError {
     #[error("{0}")]
     Graph(String),
     #[error("{0}")]
+    PostCommitCleanup(String),
+    #[error("{0}")]
     Io(#[from] std::io::Error),
     #[error("{0}")]
     Serialization(#[from] serde_json::Error),
@@ -34,6 +36,7 @@ impl CommonplaceError {
             Self::Conflict(_) => "conflict",
             Self::Storage(_) | Self::Io(_) | Self::Serialization(_) => "internal_error",
             Self::Graph(_) => "graph_unavailable",
+            Self::PostCommitCleanup(_) => "post_commit_cleanup",
         }
     }
 
@@ -43,6 +46,7 @@ impl CommonplaceError {
             Self::Conflict(_) => 3,
             Self::Storage(_)
             | Self::Graph(_)
+            | Self::PostCommitCleanup(_)
             | Self::Io(_)
             | Self::Serialization(_)
             | Self::ModelUnavailable(_) => 1,

@@ -1,7 +1,9 @@
 mod ingest;
 mod input;
 mod output;
+mod record;
 
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -37,7 +39,9 @@ enum Command {
     },
     /// Ingest local UTF-8 files; each file succeeds or fails independently.
     Ingest(ingest::IngestArgs),
-    /// Read document metadata, revision text, or an exact passage.
+    /// Atomically record entities, metadata, and cited types from JSON (not facts/JSONL).
+    Record(record::RecordArgs),
+    /// Read document metadata, revision text, or an exact passage, entity, or knowledge item.
     Get { id: String },
     /// Apply or inspect your vocabulary (entity types, predicates, and identifiers).
     Schema {
@@ -85,6 +89,18 @@ pub fn main() -> ExitCode {
     let operation = cli.command.operation();
 
     match execute(cli) {
+        Ok(response) if matches!(&response.result, CommandResult::Record(_)) => {
+            match write_record_response(&response, &mut std::io::stdout().lock()) {
+                Ok(()) => ExitCode::from(response.exit_code()),
+                Err(error) => {
+                    let error = ErrorResponse::new(operation, &error);
+                    let mut stderr = std::io::stderr().lock();
+                    let _ = serde_json::to_writer_pretty(&mut stderr, &error);
+                    let _ = stderr.write_all(b"\n").and_then(|()| stderr.flush());
+                    ExitCode::FAILURE
+                }
+            }
+        }
         Ok(response) => match serde_json::to_string_pretty(&response) {
             Ok(json) => {
                 println!("{json}");
@@ -106,6 +122,25 @@ pub fn main() -> ExitCode {
             ExitCode::from(error.exit_code())
         }
     }
+}
+
+fn write_record_response(response: &CommandResponse, output: &mut impl Write) -> Result<()> {
+    let CommandResult::Record(record) = &response.result else {
+        return Err(crate::CommonplaceError::Storage(
+            "expected record response".into(),
+        ));
+    };
+    let write = (|| -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let json = serde_json::to_vec_pretty(response)?;
+        output.write_all(&json)?;
+        output.write_all(b"\n")?;
+        output.flush()?;
+        Ok(())
+    })();
+    write.map_err(|error| crate::CommonplaceError::Storage(format!(
+        "{}; response delivery failed: {error}. Do not retry record; inspect these IDs with get.",
+        record.receipt
+    )))
 }
 
 fn execute(cli: Cli) -> Result<CommandResponse> {
@@ -139,6 +174,7 @@ fn execute(cli: Cli) -> Result<CommandResponse> {
             )),
         },
         Command::Ingest(args) => ingest::execute(&cli.store, args),
+        Command::Record(args) => record::execute(&cli.store, args),
         Command::Get { id } => Ok(CommandResponse::new(
             "get",
             "complete",
@@ -208,6 +244,8 @@ impl Command {
             Self::Ingest(args) if args.describe => "ingest.describe",
             Self::Ingest(_) => "ingest",
             Self::Get { .. } => "get",
+            Self::Record(args) if args.describe => "record.describe",
+            Self::Record(_) => "record",
             Self::Schema {
                 command: SchemaCommand::Show,
             } => "schema.show",
@@ -225,6 +263,46 @@ mod tests {
 
     use super::Cli;
     use super::execute;
+
+    #[test]
+    fn record_output_write_and_flush_failures_report_committed_ids() {
+        struct FailingOutput(bool);
+        impl std::io::Write for FailingOutput {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                if self.0 {
+                    Ok(bytes.len())
+                } else {
+                    Err(std::io::Error::other("write failed"))
+                }
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Err(std::io::Error::other("flush failed"))
+            }
+        }
+        let response = super::CommandResponse::new(
+            "record",
+            "complete",
+            super::CommandResult::Record(crate::app::record::RecordResult {
+                schema_version: 1,
+                knowledge_version: 2,
+                summary: Default::default(),
+                items: vec![],
+                receipt: "record committed at knowledge_version 2 (knowledge:1)".into(),
+            }),
+        );
+        for flush in [false, true] {
+            let error =
+                super::write_record_response(&response, &mut FailingOutput(flush)).unwrap_err();
+            assert_eq!(error.code(), "internal_error");
+            assert!(
+                error
+                    .to_string()
+                    .contains("record committed at knowledge_version 2 (knowledge:1)")
+            );
+            assert!(error.to_string().contains("Do not retry record"));
+            assert!(!error.to_string().contains("cleanup"));
+        }
+    }
 
     #[test]
     fn help_distinguishes_vocabulary_mapping_and_file_outcomes() {

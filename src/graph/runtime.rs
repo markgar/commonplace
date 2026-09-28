@@ -3,6 +3,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use oxigraph::store::Store;
+use rusqlite::Transaction;
 
 use super::{QueryConfig, SelectResult, graph_error, projection, query};
 use crate::storage::{
@@ -13,6 +14,18 @@ use crate::storage::{
 use crate::{CommonplaceError, Result};
 
 const LOCK_TIMEOUT: Duration = Duration::from_secs(2);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PublishPhase {
+    BeforeBuild,
+    AfterBuild,
+    BetweenRenames,
+    AfterActivation,
+    BeforeCommit,
+    BeforeRestore,
+    AfterCommit,
+    AfterCleanup,
+}
 
 #[cfg(test)]
 #[path = "runtime_tests.rs"]
@@ -64,13 +77,7 @@ pub fn rebuild(root: &Path, lock_timeout: Duration) -> Result<i64> {
     if !graph.try_exists()? {
         fs::create_dir(&graph).map_err(graph_error)?;
     }
-    if fs::symlink_metadata(&graph)
-        .map_err(graph_error)?
-        .file_type()
-        .is_symlink()
-    {
-        return Err(graph_error("graph directory must not be a symbolic link"));
-    }
+    validate_graph_directory(&graph)?;
     let _lease = publication_lock(root, true, lock_timeout)?;
     remove_scratch(&graph.join("candidate"))?;
     remove_scratch(&graph.join("previous"))?;
@@ -85,6 +92,134 @@ pub fn rebuild(root: &Path, lock_timeout: Duration) -> Result<i64> {
     })?;
     sync_directory(&graph)?;
     Ok(snapshot.knowledge_version)
+}
+
+pub(crate) fn publish(
+    root: &Path,
+    transaction: &Transaction<'_>,
+    timeout: Duration,
+    receipt: &str,
+) -> Result<()> {
+    publish_with(root, transaction, timeout, receipt, |_, _| Ok(()))
+}
+
+fn publish_with(
+    root: &Path,
+    transaction: &Transaction<'_>,
+    timeout: Duration,
+    receipt: &str,
+    mut hook: impl FnMut(PublishPhase, &Transaction<'_>) -> Result<()>,
+) -> Result<()> {
+    let graph = root.join("graph");
+    validate_graph_directory(&graph)?;
+    for scratch in ["candidate", "previous"] {
+        match fs::symlink_metadata(graph.join(scratch)) {
+            Ok(_) => {
+                return Err(graph_error(format!(
+                    "leftover graph/{scratch} requires explicit recovery"
+                )));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(graph_error(error)),
+        }
+    }
+    // Validate the committed graph under a reader lease, then close it before publication.
+    drop(GraphRuntime::open(root)?);
+    let prepared = (|| {
+        hook(PublishPhase::BeforeBuild, transaction)?;
+        let snapshot = GraphSnapshot::read(transaction)?;
+        projection::build(&snapshot, &graph.join("candidate"))?;
+        hook(PublishPhase::AfterBuild, transaction)
+    })();
+    if let Err(error) = prepared {
+        return discard_candidate(&graph, error);
+    }
+    let lease = match publication_lock(root, true, timeout) {
+        Ok(lease) => lease,
+        Err(error) => return discard_candidate(&graph, error),
+    };
+    let activation = activate(
+        &graph,
+        |from, to| {
+            if from == graph.join("candidate") {
+                hook(PublishPhase::BetweenRenames, transaction).map_err(std::io::Error::other)?;
+            }
+            fs::rename(from, to)
+        },
+        sync_directory,
+    );
+    if let Err(error) = activation {
+        // A failed restore retains scratch as explicit recovery evidence.
+        if graph.join("previous").try_exists().map_err(graph_error)? {
+            return Err(error);
+        }
+        return discard_candidate(&graph, error);
+    }
+    let committed = (|| {
+        hook(PublishPhase::AfterActivation, transaction)?;
+        hook(PublishPhase::BeforeCommit, transaction)?;
+        transaction
+            .execute_batch("COMMIT")
+            .map_err(crate::storage::database::storage_error)
+    })();
+    if let Err(error) = committed {
+        let rollback = if transaction.is_autocommit() {
+            Ok(())
+        } else {
+            transaction
+                .execute_batch("ROLLBACK")
+                .map_err(crate::storage::database::storage_error)
+        };
+        let restoration = hook(PublishPhase::BeforeRestore, transaction).and_then(|()| {
+            restore(
+                &graph,
+                true,
+                true,
+                |from, to| fs::rename(from, to),
+                sync_directory,
+            )
+        });
+        let mut message = format!("knowledge commit failed: {error}");
+        if let Err(error) = rollback {
+            message.push_str(&format!("; SQLite rollback failed: {error}"));
+        }
+        if let Err(error) = restoration {
+            message.push_str(&format!("; graph restoration failed: {error}"));
+            return Err(graph_error(message));
+        }
+        let result = discard_candidate(&graph, graph_error(message));
+        drop(lease);
+        return result;
+    }
+    let cleanup = (|| {
+        hook(PublishPhase::AfterCommit, transaction)?;
+        remove_scratch(&graph.join("previous"))?;
+        hook(PublishPhase::AfterCleanup, transaction)?;
+        sync_directory(&graph)
+    })();
+    cleanup.map_err(|error| CommonplaceError::PostCommitCleanup(format!(
+            "{receipt}; graph cleanup failed: {error}. Do not retry record; inspect these IDs with get and run graph rebuild."
+        )))
+}
+
+fn discard_candidate(graph: &Path, error: CommonplaceError) -> Result<()> {
+    match remove_scratch(&graph.join("candidate")).and_then(|()| sync_directory(graph)) {
+        Ok(()) => Err(error),
+        Err(cleanup) => Err(graph_error(format!(
+            "{error}; candidate cleanup failed: {cleanup}"
+        ))),
+    }
+}
+
+fn validate_graph_directory(graph: &Path) -> Result<()> {
+    if fs::symlink_metadata(graph)
+        .map_err(graph_error)?
+        .file_type()
+        .is_symlink()
+    {
+        return Err(graph_error("graph directory must not be a symbolic link"));
+    }
+    Ok(())
 }
 
 fn publication_lock(root: &Path, exclusive: bool, timeout: Duration) -> Result<File> {
@@ -153,15 +288,7 @@ fn activate(
         sync(graph)
     })();
     if let Err(error) = activation {
-        let restoration = (|| {
-            if activated {
-                rename(&current, &candidate).map_err(graph_error)?;
-            }
-            if had_current {
-                rename(&previous, &current).map_err(graph_error)?;
-            }
-            sync(graph)
-        })();
+        let restoration = restore(graph, had_current, activated, &mut rename, &mut sync);
         return match restoration {
             Ok(()) => Err(graph_error(format!(
                 "graph activation failed; previous state restored: {error}"
@@ -172,4 +299,20 @@ fn activate(
         };
     }
     Ok(())
+}
+
+fn restore(
+    graph: &Path,
+    had_current: bool,
+    activated: bool,
+    mut rename: impl FnMut(&Path, &Path) -> std::io::Result<()>,
+    mut sync: impl FnMut(&Path) -> Result<()>,
+) -> Result<()> {
+    if activated {
+        rename(&graph.join("current"), &graph.join("candidate")).map_err(graph_error)?;
+    }
+    if had_current {
+        rename(&graph.join("previous"), &graph.join("current")).map_err(graph_error)?;
+    }
+    sync(graph)
 }
