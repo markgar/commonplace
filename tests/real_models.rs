@@ -412,6 +412,33 @@ fn real_model_ingest_get_offline() {
     assert_eq!(added["result"]["summary"]["added"], 3);
     let doc = added["result"]["items"][0]["document_id"].as_str().unwrap();
     let old_revision = added["result"]["items"][0]["revision_id"].as_str().unwrap();
+    let streamed_text = "The local release decision is ready for review.";
+    let stream = || {
+        let mut command = store.command();
+        command.env("COMMONPLACE_MODEL_CACHE", &cache).args([
+            "ingest",
+            "--stdin",
+            "--source-key",
+            "release/decision",
+        ]);
+        let output = common::with_stdin(command, streamed_text.as_bytes());
+        assert!(output.status.success(), "{output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+        serde_json::from_slice::<Value>(&output.stdout).unwrap()
+    };
+    let streamed = stream();
+    assert_eq!(streamed["result"]["summary"]["added"], 1);
+    let stream_passage = streamed["result"]["items"][0]["passage_ids"][0].clone();
+    assert_eq!(
+        execute(&["get", stream_passage.as_str().unwrap()])["result"]["text"],
+        streamed_text
+    );
+    let same_stream = stream();
+    assert_eq!(same_stream["result"]["summary"]["unchanged"], 1);
+    assert_eq!(
+        same_stream["result"]["items"][0]["revision_id"],
+        streamed["result"]["items"][0]["revision_id"]
+    );
     let unchanged = execute(&["ingest", a.to_str().unwrap(), b.to_str().unwrap()]);
     assert_eq!(unchanged["result"]["summary"]["unchanged"], 2);
     assert_eq!(unchanged["result"]["items"][0]["document_id"], doc);
@@ -551,6 +578,18 @@ fn real_model_ingest_get_offline() {
         json!([])
     );
 
+    let searched = execute(&["search", "release planning"]);
+    let items = searched["result"]["items"].as_array().unwrap();
+    assert!(!items.is_empty());
+    for (rank, item) in items.iter().enumerate() {
+        assert_eq!(item["rank"], rank + 1);
+        let exact = execute(&["get", item["passage_id"].as_str().unwrap()]);
+        let mut expected = exact["result"].as_object().unwrap().clone();
+        expected.remove("kind");
+        expected.insert("rank".into(), json!(rank + 1));
+        assert_eq!(item, &Value::Object(expected));
+    }
+    assert_eq!(execute(&["search", "release planning"]), searched);
     store.apply(
         &json!({"entity_types":[{"name":"person"},{"name":"lead"}],"predicates":[
             {"name":"reports_to","object_kind":"entity","subject_types":["person"],"object_types":["lead"]},
@@ -758,7 +797,28 @@ fn real_model_ingest_get_offline() {
         .iter()
         .map(|id| execute(&["get", id])["result"].clone())
         .collect::<Vec<_>>();
-    let expected_version = extra["result"]["knowledge_version"].as_i64().unwrap() + 1;
+    let input = store.input(&json!({"items":[{
+        "kind":"fact","subject":{"id":"entity:1"},"predicate":"decision",
+        "object":{"literal":"reviewed before removal"},"support":[{"passage_id":stream_passage}]
+    }]}));
+    let pre_removal = execute(&["record", input.to_str().unwrap()]);
+    let pre_removal_id = pre_removal["result"]["items"][0]["knowledge_id"]
+        .as_str()
+        .unwrap();
+    let mut pre_removal_history = execute(&["get", pre_removal_id])["result"].clone();
+    let input = store.input(&json!({"knowledge_ids":[pre_removal_id]}));
+    let withdrawal = execute(&["withdraw", input.to_str().unwrap()]);
+    pre_removal_history["withdrawn_at"] = withdrawal["result"]["items"][0]["withdrawn_at"].clone();
+    assert_eq!(
+        execute(&["get", pre_removal_id])["result"],
+        pre_removal_history
+    );
+    let query = format!("SELECT ?p ?o WHERE {{ <urn:commonplace:{pre_removal_id}> ?p ?o }}");
+    assert_eq!(
+        execute(&["graph", "query", &query])["result"]["rows"],
+        json!([])
+    );
+    let expected_version = withdrawal["result"]["knowledge_version"].as_i64().unwrap() + 1;
     let removed = execute(&["remove", "--source-key", source_key, "--json"]);
     assert_eq!(
         removed["result"],
@@ -1088,8 +1148,31 @@ fn real_model_ingest_get_offline() {
         execute(&["graph", "query", all_query])["result"],
         after_withdrawal
     );
+    let final_ingest = execute(&["ingest", a.to_str().unwrap()]);
+    assert_eq!(final_ingest["result"]["summary"]["added"], 1);
+    assert_ne!(
+        final_ingest["result"]["items"][0]["document_id"],
+        again["result"]["items"][0]["document_id"]
+    );
+    let final_search = execute(&["search", "release planning"]);
+    assert!(
+        !final_search["result"]["items"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(execute(&["init"])["status"], "unchanged");
+    assert_eq!(execute(&["search", "release planning"]), final_search);
+    assert_eq!(
+        execute(&["graph", "query", all_query])["result"],
+        after_withdrawal
+    );
+    assert_eq!(
+        execute(&["get", pre_removal_id])["result"],
+        pre_removal_history
+    );
     println!(
-        "PASS pinned local model; v2 multi-file public binary, unchanged/content/metadata revisions, exact UTF-8 get, current FTS/vector parity, strict override and default HF cache hits, unchanged graph bytes during ingest, public multiply-typed entity + relationship + literal decision record/get/SPARQL/rebuild/reopen and exact old/new citation parity; explicit file-key removal of all revisions/index/evidence, retained active membership/relationship/literal facts with empty/mixed support and unrelated citations, public search exclusion, reopen/rebuild, and new reingest identity; atomic cited and empty-support withdrawal with exact history, active IDs/RDF absence, unchanged sources/search/unrelated knowledge, reopen/rebuild and later removal lifecycle parity; cache={}",
+        "PASS pinned local model; v2 directory/direct/streamed public ingestion, unchanged/content/metadata revisions, exact UTF-8 get, ordered hybrid citations before authoring, current FTS/vector parity, strict override and default HF cache hits, unchanged graph bytes during ingest, public multiply-typed entity + relationship + literal decision record/get/SPARQL/rebuild/reopen and exact old/new citation parity; cited withdrawal before removal with retained history; explicit file-key removal of all revisions/index/evidence, retained active membership/relationship/literal facts with empty/mixed support and unrelated citations, public search exclusion, reopen/rebuild, and new reingest identity; atomic cited and empty-support withdrawal with exact history, active IDs/RDF absence, unchanged sources/search/unrelated knowledge, reopen/rebuild and later removal lifecycle parity; final reingest/reopen search and graph parity; cache={}",
         cache.display()
     );
 }
