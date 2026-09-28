@@ -34,12 +34,12 @@ Domain values and rules
         |                      |
         v                      v
 SQLite persistence       External engines
-                         embeddings, reranking, Ladybug
+                         embeddings, reranking, Grafeo
 ```
 
 Dependencies point inward:
 
-- domain code imports no CLI, SQLite, inference runtime, or Ladybug package;
+- domain code imports no CLI, SQLite, inference runtime, or Grafeo package;
 - workflows depend on domain values and narrow infrastructure capabilities;
 - infrastructure implements storage and external-runtime capabilities;
 - CLI code depends on workflows and serialization models; and
@@ -200,7 +200,7 @@ There are no provider registries or runtime profile selectors.
 ### 5.3 Graph engine
 
 `GraphEngine` is a narrow internal trait implemented by
-`LadybugGraphEngine`. It:
+`GrafeoGraphEngine`. It:
 
 - builds a graph from a complete `GraphSnapshot`;
 - verifies the candidate graph;
@@ -209,7 +209,7 @@ There are no provider registries or runtime profile selectors.
 - executes read-only Cypher with row and time budgets; and
 - exposes graph schema information.
 
-`GraphRuntime` owns the active Ladybug resource for a CLI process.
+`GraphRuntime` owns the active Grafeo resource for a CLI process.
 It manages one current graph path and one temporary candidate path. Opening the
 current graph verifies its stored `knowledge_version` against SQLite before
 returning a query handle. Candidate creation, activation, rollback, and cleanup
@@ -302,10 +302,12 @@ increments `knowledge_version`, rebuilds the graph, and commits atomically.
 `get_record` reads canonical SQLite state, including withdrawn history and exact
 evidence.
 
-`query_graph` first verifies version parity, then delegates read-only Cypher,
-budget enforcement, and cancellation to Ladybug. It stops after
-`row_limit + 1` rows to detect truncation and serializes supported graph values
-deterministically.
+`query_graph` first verifies version parity, then executes Cypher through a
+native Grafeo `Role::ReadOnly` session with a configured query deadline. It
+stops after `row_limit + 1` rows to detect truncation and serializes supported
+graph values deterministically. The synchronous CLI process terminates on
+Ctrl+C; the architecture does not promise cancellation of one query while
+keeping the process alive.
 
 ## 7. Transaction and publication model
 
@@ -326,7 +328,7 @@ but uncommitted database state is not.
 
 ### 7.2 Knowledge changes
 
-Removal, authoring, and withdrawal coordinate SQLite and Ladybug:
+Removal, authoring, and withdrawal coordinate SQLite and Grafeo:
 
 ```text
 begin SQLite transaction
@@ -408,7 +410,7 @@ Errors are typed by responsibility:
 - `limit_exceeded`; and
 - `internal_error`.
 
-Infrastructure translates SQLite, model, and Ladybug failures once at its
+Infrastructure translates SQLite, model, and Grafeo failures once at its
 boundary. The CLI maps typed errors to stable JSON codes, actionable messages,
 and exit codes. Whole-command structural errors fail before item processing.
 Document batches may report per-item errors and `partial`; schema, knowledge,
@@ -454,11 +456,12 @@ representation identity, reranking order, and explicit runtime failure.
 Use small deterministic providers for pipeline tests and a small separate suite
 against the pinned real models.
 
-### Ladybug tests
+### Grafeo tests
 
 Verify complete projection, version metadata, citation traversal, native
-read-only enforcement, row limits, time limits, actual cancellation, canonical
-SQLite-ID parity, and cleanup of failed candidate graphs.
+role-scoped read-only enforcement, row limits, native query deadlines,
+canonical SQLite-ID parity, and cleanup of failed candidate graphs. CLI
+integration tests verify that process termination stops an executing query.
 
 ### Product tests
 

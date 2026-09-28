@@ -51,7 +51,7 @@ The following rules apply throughout the design:
 3. Every citation resolves to a canonical passage and source revision.
 4. Authored knowledge changes only through explicit record, withdraw, and source
    removal operations.
-5. Ladybug contains a complete, derived projection of active knowledge and can
+5. Grafeo contains a complete, derived projection of active knowledge and can
    be rebuilt from SQLite.
 6. Graph reads fail when the graph version does not match SQLite.
 7. Ingestion is batch-first, synchronous, bounded in memory, and independently

@@ -2,9 +2,8 @@
 
 ## Outcome
 
-**Packaging passes on every intended target: macOS arm64, Windows x64 and
-arm64, and Linux x64 and arm64. Grafeo 0.5.43 does not yet satisfy the complete
-Commonplace graph contract.**
+**Selected for Commonplace.** Packaging passes on every intended target:
+macOS arm64, Windows x64 and arm64, and Linux x64 and arm64.
 
 The standalone Windows x64 executable ran on an independent Windows 11 Pro x64
 machine without Rust or any other dependency installed. Native GitHub-hosted
@@ -13,11 +12,13 @@ artifacts. Cypher projection, canonical evidence properties, persistence, and
 role-scoped read-only sessions passed on every tested target.
 
 Grafeo therefore demonstrates that a small, self-contained, cross-platform
-Rust graph package is practical. Database-level read-only enforcement remains
-broken, though the native role-scoped control used by public queries works.
+Rust graph package is practical. Commonplace uses native role-scoped read-only
+sessions rather than Grafeo's ineffective database-level read-only setting.
 Query deadlines produce timeout errors on every target where the corrected
-probe exceeded its deadline, but cancellation latency varied substantially.
-Grafeo has no public external cancellation handle.
+probe exceeded its deadline, although cancellation latency varies
+substantially. The synchronous CLI uses process termination for user
+cancellation and does not promise cancellation of one query while keeping the
+process alive.
 
 ## Evaluated component
 
@@ -136,9 +137,13 @@ embedded Cypher while packaging cleanly on every intended OS and architecture.
 Public Cypher must always use `Role::ReadOnly`; `Config::read_only` cannot be
 relied on for mutation rejection in version 0.5.43.
 
-Before final selection, Commonplace must make one bounded decision about query
-cancellation. For the synchronous CLI, native deadlines plus whole-process
-termination may be accepted, with the observed deadline overshoot documented.
-If a strict duration bound or in-process cancellation token remains mandatory,
-Grafeo needs an upstream fix, a fork, or process-isolated graph queries. No
-second graph backend should be introduced.
+Select Grafeo 0.5.43 for the current synchronous CLI with these boundaries:
+
+- public Cypher always executes through `Role::ReadOnly`;
+- configured deadlines are operational budgets, not precise wall-clock limits;
+- Ctrl+C terminates the CLI process rather than cancelling an individual query;
+  and
+- a future long-running service must reevaluate cancellation before reusing the
+  embedded query path.
+
+No second graph backend is introduced.

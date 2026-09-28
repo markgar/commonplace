@@ -24,7 +24,7 @@ belongs to the calling agent.
 ### 2.1 Local and personal
 
 A knowledge base is a local directory containing authoritative SQLite state and
-a derived Ladybug graph. Anyone who can open the directory and run the CLI has
+a derived Grafeo graph. Anyone who can open the directory and run the CLI has
 full access.
 
 There are no tenants, accounts, principals, grants, namespaces, or network
@@ -257,10 +257,10 @@ kg schema apply schema.json --json
 kg schema show --json
 ```
 
-Schema application changes SQLite only. It does not rebuild Ladybug because the
+Schema application changes SQLite only. It does not rebuild Grafeo because the
 graph projects only vocabulary referenced by active knowledge.
 
-The physical SQLite and Ladybug schemas remain generic. User vocabulary is data,
+The physical SQLite and Grafeo schemas remain generic. User vocabulary is data,
 not generated database DDL.
 
 ## 7. Entities and authored knowledge
@@ -360,7 +360,7 @@ Any invalid or already withdrawn ID rejects the complete batch.
 
 ## 8. Graph projection and queries
 
-Ladybug is a required query engine and a derived store. It contains all active
+Grafeo is the required query engine and a derived store. It contains all active
 knowledge and enough source data to return citation-ready graph results.
 
 The projection uses a stable generic shape:
@@ -392,7 +392,7 @@ Document nodes carry only `document_id` and `source_key`. Passage nodes carry:
 Only entities participating in active knowledge are projected. Only passages
 supporting active knowledge and their documents are projected. Uncited corpus
 passages remain searchable in SQLite. Ordinary document ingestion does not
-rebuild Ladybug; source removal does because it can remove projected evidence.
+rebuild Grafeo; source removal does because it can remove projected evidence.
 Only entity types and predicates referenced by active knowledge are projected;
 the complete vocabulary remains available through `kg schema show`.
 
@@ -416,11 +416,13 @@ leave a version mismatch. The supported recovery is creation of a fresh store
 and reingestion. There is no automatic repair, public graph-rebuild command,
 retained graph-generation system, or transaction coordinator.
 
-`kg graph query` accepts read-only Cypher. Mutation clauses are rejected by the
-graph engine rather than filtered only by string matching. Queries have row and
-time budgets, and cancellation must interrupt execution. The command reads at
-most `row_limit + 1` rows so it can report truncation without retaining a result
-set.
+`kg graph query` accepts read-only Cypher through a native Grafeo
+`Role::ReadOnly` session. Mutation clauses are rejected by the graph engine
+rather than filtered only by string matching. Grafeo's native query deadline
+enforces the configured time budget, although cancellation may occur after the
+deadline. Ctrl+C terminates the synchronous CLI process rather than cancelling
+an individual in-process query. The command reads at most `row_limit + 1` rows
+so it can report truncation without retaining a result set.
 
 ## 9. CLI contract
 
@@ -449,7 +451,7 @@ kg graph schema
 kg graph query
 ```
 
-`kg init` creates the SQLite database, Ladybug storage location, and local
+`kg init` creates the SQLite database, Grafeo storage location, and local
 configuration for one knowledge base. It does not create model profiles,
 approval state, cache profiles, or a separate model-preparation workflow.
 Pinned models load on first use and may be obtained through the selected
@@ -526,7 +528,7 @@ Commonplace does not include:
 - multiple selectable model profiles;
 - background workers or job recovery;
 - incremental graph projection;
-- historical or withdrawn knowledge in Ladybug;
+- historical or withdrawn knowledge in Grafeo;
 - retained graph sessions or query handles;
 - a general query-plan language, continuation tokens, or retained result sets;
 - fixed relationship, decision, count, or proof-inspection query APIs;

@@ -12,13 +12,13 @@ knowledge, and reproduce the same results after reopening the application.
 Before production implementation, a disposable Rust spike must prove that the
 selected components can ship together as a self-contained distribution:
 
-- official Ladybug integration;
+- Grafeo 0.5.43 with the `lpg` feature profile;
 - SQLite with FTS5;
 - one SQLite vector extension;
 - one local embedding model and runtime;
 - one local reranker and runtime;
-- native read-only Cypher enforcement;
-- real graph-query cancellation; and
+- native role-scoped read-only Cypher enforcement;
+- native query deadlines and process-level cancellation; and
 - release execution without an installed interpreter, language runtime, source
   checkout, or build tool.
 
@@ -83,7 +83,7 @@ package test, is recorded in
 
 7. **Graph slice**
 
-   Add deterministic snapshot construction, complete Ladybug replacement,
+   Add deterministic snapshot construction, Grafeo integration,
    version checks, citation projection, read-only Cypher, and graph schema.
 
 8. **Removal slice**
@@ -198,7 +198,8 @@ A release candidate must pass this sequence from an empty store:
 - Graph and SQLite versions must match before query execution.
 - Cypher mutations are rejected natively.
 - Row limits are enforced.
-- An over-budget query is actually cancelled.
+- An over-budget query returns Grafeo's native timeout error.
+- Terminating the synchronous CLI process stops an executing graph query.
 - A graph activation failure leaves SQLite unchanged.
 - A reported SQLite commit failure restores the previous graph.
 
@@ -207,7 +208,7 @@ A release candidate must pass this sequence from an empty store:
 - Foreign keys and `STRICT` tables are active on every connection.
 - The process-level writer lock works on every supported platform.
 - Incompatible store formats are rejected without mutation.
-- The packaged executable loads SQLite extensions and Ladybug on a clean target.
+- The packaged executable loads SQLite extensions and Grafeo on a clean target.
 - Commands that do not use inference do not load model weights.
 - Source text never leaves the local inference path.
 

@@ -6,7 +6,7 @@ SQLite stores all authoritative Commonplace data. This document defines the
 durable model, transaction ownership, deletion behavior, and invariants required
 by the product.
 
-Ladybug files are derived artifacts. They contain no unique authored fact and
+Grafeo files are derived artifacts. They contain no unique authored fact and
 never override SQLite.
 
 ## 2. Storage principles
@@ -19,7 +19,7 @@ never override SQLite.
 6. User vocabulary is represented as rows in generic tables.
 7. Type memberships and facts share one knowledge-item lifecycle.
 8. Aliases and identifiers are add-only metadata.
-9. Withdrawn knowledge remains in SQLite and is excluded from Ladybug.
+9. Withdrawn knowledge remains in SQLite and is excluded from Grafeo.
 10. Incompatible representation changes require a fresh store.
 
 ## 3. Table inventory
