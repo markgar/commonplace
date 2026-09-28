@@ -3,6 +3,7 @@ mod input;
 mod output;
 mod record;
 mod remove;
+mod withdraw;
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -58,6 +59,8 @@ enum Command {
     Record(record::RecordArgs),
     /// Permanently delete one source's stored evidence, retaining authored knowledge and source files.
     Remove(remove::RemoveArgs),
+    /// Atomically withdraw active knowledge from JSON, preserving exact retained history.
+    Withdraw(withdraw::WithdrawArgs),
     /// Read document metadata, revision text, or an exact passage, entity, or knowledge item.
     Get { id: String },
     /// Apply or inspect your vocabulary (entity types, predicates, and identifiers).
@@ -109,7 +112,7 @@ pub fn main() -> ExitCode {
         Ok(response)
             if matches!(
                 &response.result,
-                CommandResult::Record(_) | CommandResult::Remove(_)
+                CommandResult::Record(_) | CommandResult::Remove(_) | CommandResult::Withdraw(_)
             ) =>
         {
             match write_committed_response(&response, &mut std::io::stdout().lock()) {
@@ -150,9 +153,12 @@ fn write_committed_response(response: &CommandResponse, output: &mut impl Write)
     let (receipt, guidance) = match &response.result {
         CommandResult::Record(record) => (&record.receipt, crate::app::record::RECOVERY_GUIDANCE),
         CommandResult::Remove(removed) => (&removed.receipt, crate::app::remove::RECOVERY_GUIDANCE),
+        CommandResult::Withdraw(withdrawn) => {
+            (&withdrawn.receipt, crate::app::withdraw::RECOVERY_GUIDANCE)
+        }
         _ => {
             return Err(crate::CommonplaceError::Storage(
-                "expected committed record or remove response".into(),
+                "expected committed record, remove, or withdraw response".into(),
             ));
         }
     };
@@ -229,6 +235,7 @@ fn execute(cli: Cli) -> Result<CommandResponse> {
         }
         Command::Record(args) => record::execute(&cli.store, args),
         Command::Remove(args) => remove::execute(&cli.store, args),
+        Command::Withdraw(args) => withdraw::execute(&cli.store, args),
         Command::Get { id } => Ok(CommandResponse::new(
             "get",
             "complete",
@@ -303,6 +310,8 @@ impl Command {
             Self::Record(_) => "record",
             Self::Remove(args) if args.describe => "remove.describe",
             Self::Remove(_) => "remove",
+            Self::Withdraw(args) if args.describe => "withdraw.describe",
+            Self::Withdraw(_) => "withdraw",
             Self::Schema {
                 command: SchemaCommand::Show,
             } => "schema.show",
@@ -400,6 +409,33 @@ mod tests {
                 crate::app::get::get(&root, "doc:1").unwrap_err().code(),
                 "not_found"
             );
+            crate::graph::GraphRuntime::open(&root).unwrap();
+        }
+        let schema = directory.path().join("schema.json");
+        std::fs::write(&schema, r#"{"entity_types":[{"name":"person"}]}"#).unwrap();
+        run(&["schema", "apply", schema.to_str().unwrap()]);
+        let input = directory.path().join("record.json");
+        std::fs::write(&input, r#"{"items":[{"kind":"entity","ref":"p","name":"P"},{"kind":"type_membership","entity":{"ref":"p"},"entity_type":"person"}]}"#).unwrap();
+        run(&["record", input.to_str().unwrap()]);
+        let input = directory.path().join("withdraw.json");
+        std::fs::write(&input, r#"{"knowledge_ids":["knowledge:1"]}"#).unwrap();
+        let response = run(&["withdraw", input.to_str().unwrap()]);
+        for flush in [false, true] {
+            let error =
+                super::write_committed_response(&response, &mut FailingOutput(flush)).unwrap_err();
+            assert_eq!(error.code(), "internal_error");
+            assert!(
+                error
+                    .to_string()
+                    .contains("withdraw committed at knowledge_version 3 (knowledge:1)")
+            );
+            assert!(error.to_string().contains("Do not retry withdraw"));
+            assert!(!error.to_string().contains("rebuild"));
+            assert!(!error.to_string().contains("cleanup"));
+            assert!(!error.to_string().contains("retry record"));
+            let history =
+                serde_json::to_value(crate::app::get::get(&root, "knowledge:1").unwrap()).unwrap();
+            assert!(history["withdrawn_at"].is_string());
             crate::graph::GraphRuntime::open(&root).unwrap();
         }
     }

@@ -8,8 +8,8 @@ queries.
 
 The Rust implementation supports store initialization, additive vocabulary,
 file and generic stdin/JSONL ingestion, hybrid search, atomic cited entity/type/fact
-authoring, explicit source removal, authoritative reads, and read-only RDF graph
-queries and rebuild:
+authoring and withdrawal, explicit source removal, authoritative reads, and
+read-only RDF graph queries and rebuild:
 
 ```sh
 cargo run --bin commonplace -- --store .commonplace init
@@ -122,8 +122,7 @@ never merges by name. Memberships resolve exactly one selector: `{"id":"entity:1
 `{"identifier":{"scheme":"email","value":"riley@example.test"}}`, `{"name":"R"}`,
 or `{"ref":"riley"}`. Exact case-sensitive name/alias matches must be unambiguous.
 Local refs match `[A-Za-z][A-Za-z0-9_]{0,63}`, refer only to preceding entity items,
-and last only for this request. Withdrawal and name changes are not supported
-by this release.
+and last only for this request. Name changes are not supported by this release.
 
 Add directed facts using a declared predicate and matching subject/object types:
 
@@ -213,6 +212,59 @@ Their messages identify committed IDs/version and say not to retry `record`;
 inspect those IDs with `get`, and rebuild for cleanup failures. If the process or
 output stream dies, receipt delivery cannot be guaranteed: inspect canonical
 state before retrying a non-idempotent request.
+
+## Atomic withdrawal and retained history
+
+Create `withdraw.json` using actual knowledge IDs returned by `record` or `get`:
+
+```json
+{"withdrawn_by":"manual","knowledge_ids":["knowledge:4","knowledge:5"]}
+```
+
+```sh
+cargo run --bin commonplace -- withdraw --describe --json
+cargo run --bin commonplace -- --store .commonplace withdraw withdraw.json --json
+cargo run --bin commonplace -- --store .commonplace get knowledge:4
+```
+
+One JSON-file request withdraws **all** selected active memberships/facts or none.
+The graph and entity active type/membership/fact IDs exclude withdrawn items.
+`get` retains the exact subtype, canonical literal, evidence, schema version and
+creation provenance, adding `withdrawn_at` and optional `withdrawn_by`. Withdrawal
+is final; record a new corrected assertion rather than restoring or rewriting one.
+Withdrawal does not delete sources, change search, detach citations, or cascade.
+Later explicit source removal still detaches its evidence from retained history.
+
+The complete proposed batch is validated **before** changing lifecycle columns.
+Removing the last permitted type on either endpoint of a remaining active fact
+fails. Retain another permitted active type or include every dependent fact in the
+same withdrawal request; input order does not affect validity. Another active
+membership of the same permitted type also suffices.
+
+Input accepts 1-1000 unique canonical `knowledge:<positive i64>` IDs and at most
+1 MiB of JSON bytes. Empty batches, duplicates, wrong ID tags, unknown/duplicate
+fields, bad labels and already-withdrawn IDs yield `invalid_input`; unknown IDs
+yield `not_found`. Supplied `withdrawn_by` contains 1-128 Unicode scalar values;
+omit it for no label (explicit null is rejected). Oversize input yields
+`limit_exceeded`. All failures reject the whole batch. The writer/publication
+timeout is two seconds. There is no stdin, JSONL, positional-ID or check mode.
+`--describe` is exclusive with the file argument, requires no store or models,
+and returns the generated execution schema, input example, typed output example
+and stateful validation rules.
+
+Success uses `operation: withdraw`, `contract_version: "1"`, `status: complete`.
+The result contains `knowledge_version`, `summary: {"items":N,"withdrawn":N}`, and
+one indexed item per input ID in request order. Items carry the complete existing
+Knowledge fields (without `get`'s outer `kind: knowledge` tag), including `support`
+even when empty. All selected items share one withdrawal timestamp; the
+knowledge version advances once. `withdraw --describe` shows a complete example.
+
+The existing coordinated publication and rollback rules apply. **A nonzero exit
+can follow a successful commit:** cleanup errors use `post_commit_cleanup`,
+response-delivery errors use `internal_error`. Both report the committed version
+and IDs with **do not retry withdraw** guidance; inspect those IDs using `get`.
+Cleanup failures additionally require `graph rebuild`. If delivery is uncertain,
+inspect the submitted IDs before retrying; responses are not replayed.
 
 ## Explicit source removal
 
@@ -613,7 +665,9 @@ checks full canonical/index/evidence deletion, retained empty/mixed membership,
 relationship and literal-fact
 support and unrelated citations, public search exclusion, graph/reopen parity,
 and new document identity on reingestion. All sources used are fresh temporary
-test files.
+test files. It then withdraws cited and retained empty-support facts atomically,
+checks exact historical fields, active IDs/RDF absence, unchanged sources/search,
+rebuild/reopen parity, and withdrawal lifecycle preservation through later removal.
 The stream check runs real
 nonempty stdin/JSONL submissions, unchanged and metadata-only reruns, partial
 failures, exact old reads, and current index/unchanged graph checks. The file
