@@ -4,9 +4,45 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Child, Command, Output, Stdio};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+
+fn binary() -> &'static PathBuf {
+    static BINARY: OnceLock<PathBuf> = OnceLock::new();
+    BINARY.get_or_init(|| {
+        let selected = std::env::var_os("COMMONPLACE_TEST_BINARY");
+        let path = selected
+            .as_ref()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_commonplace")));
+        assert!(path.is_absolute(), "test binary must be an absolute path");
+        let metadata = std::fs::symlink_metadata(&path).expect("test binary must exist");
+        assert!(metadata.is_file(), "test binary must be a regular file");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_ne!(
+                metadata.permissions().mode() & 0o111,
+                0,
+                "test binary must be executable"
+            );
+        }
+        let path = path.canonicalize().expect("resolve test binary");
+        let hash = Sha256::digest(std::fs::read(&path).expect("read test binary"));
+        eprintln!(
+            "COMMONPLACE_TEST_BINARY_RECEIPT {}",
+            json!({
+                "mode": if selected.is_some() { "external" } else { "cargo" },
+                "path": path,
+                "sha256": format!("{hash:x}")
+            })
+        );
+        path
+    })
+}
 
 pub struct Store {
     pub directory: tempfile::TempDir,
@@ -43,7 +79,7 @@ impl Store {
     }
 
     pub fn command(&self) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_commonplace"));
+        let mut command = Command::new(binary());
         command.arg("--store").arg(&self.root);
         command
     }

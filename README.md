@@ -622,6 +622,12 @@ without automatic replacement. Unchanged and empty documents require no model.
 
 ## Development checks
 
+The manual [local macOS arm64 packaging procedure](docs/release-local.md) builds
+and exercises an extracted production binary with copied pinned models. Its
+test-only `COMMONPLACE_TEST_BINARY` selector emits an in-process path/hash receipt;
+package acceptance must verify that receipt, not just a passing test result.
+This remains developer-host evidence, not independent clean-target certification.
+
 ```sh
 cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
