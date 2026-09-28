@@ -1,5 +1,10 @@
 # Rust packaging spike
 
+This report records the original Ladybug-based full-stack packaging baseline.
+Ladybug was later replaced by Grafeo; the current graph decision and
+cross-platform evidence are in
+[the Grafeo evaluation spike](grafeo-evaluation.md).
+
 ## Outcome
 
 **Pass for macOS arm64.** The selected Rust, SQLite, vector, graph, embedding,

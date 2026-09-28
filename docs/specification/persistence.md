@@ -18,7 +18,7 @@ never override SQLite.
 5. FTS and vector rows publish in the same transaction as their passages.
 6. User vocabulary is represented as rows in generic tables.
 7. Type memberships and facts share one knowledge-item lifecycle.
-8. Aliases and identifiers are add-only metadata.
+8. Alias and identifier corrections are explicit and transactional.
 9. Withdrawn knowledge remains in SQLite and is excluded from Grafeo.
 10. Incompatible representation changes require a fresh store.
 
@@ -108,13 +108,13 @@ exactly the stored passage text.
 
 ## 6. Search
 
-The lexical index is an external-content FTS5 table:
+The lexical index is a contentless FTS5 table:
 
 ```sql
 CREATE VIRTUAL TABLE passage_fts USING fts5(
     text,
-    content = 'passages',
-    content_rowid = 'passage_id',
+    content = '',
+    contentless_delete = 1,
     tokenize = 'unicode61'
 );
 ```
@@ -132,13 +132,15 @@ Both virtual tables use `passage_id` directly. There are no triggers or mapping
 tables. `SearchIndexStore` explicitly inserts and deletes index rows inside the
 document transaction.
 
-Only passages from the current revision of each document appear in the virtual
-tables. Publishing a replacement revision explicitly deletes the previous
-revision's FTS and vector rows before inserting the new rows.
+Only passages from the current revision of each document are indexed. Search
+returns `passage_id` values and always hydrates text and metadata from the
+authoritative `passages` table. Publishing a replacement revision explicitly
+deletes the previous revision's FTS and vector rows before inserting the new
+rows.
 
 The implementation verifies:
 
-- one FTS row and one vector row for every searchable passage;
+- the FTS and vector row IDs equal the current searchable passage IDs;
 - no index row references a missing passage;
 - vector dimensions match the store format; and
 - vector query results hydrate through the same passage ID.
@@ -189,10 +191,10 @@ Literal-valued predicates have subject endpoint rows and encode their literal
 kind in `object_kind`.
 
 Schema application is additive. Existing terms cannot be redefined or removed,
-whether or not active knowledge currently references them. A change that inserts
-at least one term increments `schema_version` once and assigns that version to
-every new term. A no-op application returns `unchanged` and leaves the version
-unchanged.
+whether or not active knowledge currently references them. Any effective
+vocabulary change, including adding a predicate endpoint, increments
+`schema_version` once. New terms record that version. A no-op application
+returns `unchanged` and leaves the version unchanged.
 
 ## 8. Entities and identity
 
@@ -229,6 +231,11 @@ CREATE TABLE entity_identifiers (
 Aliases and identifiers are case-sensitive exact strings. Identifiers uniquely
 resolve an entity within a scheme. Name and alias lookups may return multiple
 candidates and therefore cannot silently resolve ambiguity.
+
+Metadata corrections may delete aliases and identifiers through `kg record`.
+The request must identify the owning entity by canonical ID. Deletion is
+transactional, does not delete the entity, and is not retained as knowledge
+history.
 
 ## 9. Authored knowledge
 
@@ -364,8 +371,8 @@ The workflow:
 ### Schema application
 
 One transaction validates and inserts all requested vocabulary changes, then
-increments `schema_version` once when rows are added. A no-op returns
-`unchanged`.
+increments `schema_version` once when any term or endpoint row is added. A no-op
+returns `unchanged`.
 
 ### Knowledge authoring and withdrawal
 
@@ -401,7 +408,7 @@ A graph snapshot is a deterministic read of:
 
 - the current `knowledge_version`;
 - active knowledge items and subtype rows;
-- referenced entities, active type memberships, aliases, and identifiers;
+- referenced entities and active type memberships;
 - referenced predicates and entity types;
 - evidence passages and their source revisions and documents; and
 - schema terms used by active knowledge.
@@ -423,14 +430,9 @@ knowledge item before returning. The graph stores the same
 
 ## 14. Time and serialization
 
-Operational timestamps are UTC RFC 3339 text. SQLite supplies transaction
-timestamps so rows created by one operation share a consistent time.
-
-Repository statements use:
-
-```sql
-strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-```
+Operational timestamps are UTC RFC 3339 text. The workflow obtains one
+timestamp immediately before opening its write transaction and binds that value
+to every row created or changed by the operation.
 
 Rust parses and normalizes caller-supplied timestamps before binding them.
 
