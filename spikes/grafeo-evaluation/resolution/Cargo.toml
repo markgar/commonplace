@@ -1,0 +1,21 @@
+[package]
+name = "grafeo-resolution-prototype"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+anyhow = "1.0"
+grafeo = { version = "=0.5.43", default-features = false, features = ["lpg"] }
+grafeo-common = { version = "=0.5.43", default-features = false }
+grafeo-core = { version = "=0.5.43", default-features = false }
+grafeo-engine = { version = "=0.5.43", default-features = false }
+rusqlite = { version = "=0.37.0", features = ["bundled"] }
+serde_json = "1.0"
+sha2 = "=0.10.9"
+tempfile = "3.23"
+
+[patch.crates-io]
+grafeo-common = { path = "target/vendor/grafeo-common-0.5.43" }
+grafeo-core = { path = "target/vendor/grafeo-core-0.5.43" }
+grafeo-engine = { path = "target/vendor/grafeo-engine-0.5.43" }

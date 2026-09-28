@@ -1,0 +1,471 @@
+{
+  "bounded_executor": [
+    {
+      "cap": 3,
+      "chunk_size": 1,
+      "materialized_rows": 3,
+      "pulls": 3
+    },
+    {
+      "cap": 3,
+      "chunk_size": 1024,
+      "materialized_rows": 3,
+      "pulls": 1
+    },
+    {
+      "cap": 0,
+      "chunk_size": 1024,
+      "materialized_rows": 0,
+      "pulls": 0
+    }
+  ],
+  "query": {
+    "authorization": "pass",
+    "deadline": "timeout error: Query exceeded the 1ms timeout\n   |\n  help: Increase with Config::with_query_timeout() or disable with Config::without_query_timeout()",
+    "parameter_binding": "pass",
+    "query_regressions": [
+      {
+        "bounded": 3,
+        "full": 10000,
+        "query": "UNWIND range(1, 10000) AS x RETURN x"
+      },
+      {
+        "bounded": 3,
+        "full": 10000,
+        "query": "UNWIND range(1, 10000) AS x RETURN x ORDER BY x DESC"
+      },
+      {
+        "bounded": 3,
+        "full": 4,
+        "query": "UNWIND [2, 1, 2, 3, 4] AS x RETURN DISTINCT x ORDER BY x"
+      },
+      {
+        "bounded": 1,
+        "full": 1,
+        "query": "UNWIND range(1, 100) AS x RETURN sum(x) AS total"
+      },
+      {
+        "bounded": 3,
+        "full": 4,
+        "query": "RETURN 1 AS x UNION ALL RETURN 2 AS x UNION ALL RETURN 3 AS x UNION ALL RETURN 4 AS x"
+      },
+      {
+        "bounded": 3,
+        "full": 5,
+        "query": "UNWIND range(1, $n) AS x RETURN x ORDER BY x DESC SKIP 2 LIMIT 5"
+      }
+    ],
+    "semantic_cases": [
+      {
+        "query": "MATCH p=(a:Entity)-[r:RELATIONSHIP]->(b:Entity) RETURN nodes(p), relationships(p), startNode(r), endNode(r)",
+        "rows": [
+          [
+            [
+              {
+                "kind": "node",
+                "labels": [
+                  "Entity"
+                ],
+                "properties": {
+                  "id": "entity:1",
+                  "name": "Atlas"
+                }
+              },
+              {
+                "kind": "node",
+                "labels": [
+                  "Entity"
+                ],
+                "properties": {
+                  "id": "entity:2",
+                  "name": "Roadmap"
+                }
+              }
+            ],
+            [
+              {
+                "kind": "relationship",
+                "properties": {
+                  "predicate": "depends_on"
+                },
+                "source": "entity:1",
+                "target": "entity:2",
+                "type": "RELATIONSHIP"
+              }
+            ],
+            {
+              "kind": "node",
+              "labels": [
+                "Entity"
+              ],
+              "properties": {
+                "id": "entity:1",
+                "name": "Atlas"
+              }
+            },
+            {
+              "kind": "node",
+              "labels": [
+                "Entity"
+              ],
+              "properties": {
+                "id": "entity:2",
+                "name": "Roadmap"
+              }
+            }
+          ]
+        ]
+      },
+      {
+        "query": "MATCH (a:Entity) WITH a AS x RETURN x, x.name ORDER BY x.name",
+        "rows": [
+          [
+            {
+              "kind": "node",
+              "labels": [
+                "Entity"
+              ],
+              "properties": {
+                "id": "entity:1",
+                "name": "Atlas"
+              }
+            },
+            "Atlas"
+          ],
+          [
+            {
+              "kind": "node",
+              "labels": [
+                "Entity"
+              ],
+              "properties": {
+                "id": "entity:2",
+                "name": "Roadmap"
+              }
+            },
+            "Roadmap"
+          ]
+        ]
+      },
+      {
+        "query": "MATCH (a:Entity) RETURN collect(a) AS nodes",
+        "rows": [
+          [
+            [
+              {
+                "kind": "node",
+                "labels": [
+                  "Entity"
+                ],
+                "properties": {
+                  "id": "entity:1",
+                  "name": "Atlas"
+                }
+              },
+              {
+                "kind": "node",
+                "labels": [
+                  "Entity"
+                ],
+                "properties": {
+                  "id": "entity:2",
+                  "name": "Roadmap"
+                }
+              }
+            ]
+          ]
+        ]
+      },
+      {
+        "query": "MATCH (a:Entity) RETURN DISTINCT a",
+        "rows": [
+          [
+            {
+              "kind": "node",
+              "labels": [
+                "Entity"
+              ],
+              "properties": {
+                "id": "entity:1",
+                "name": "Atlas"
+              }
+            }
+          ],
+          [
+            {
+              "kind": "node",
+              "labels": [
+                "Entity"
+              ],
+              "properties": {
+                "id": "entity:2",
+                "name": "Roadmap"
+              }
+            }
+          ]
+        ]
+      },
+      {
+        "query": "MATCH (a:Entity)-[r:RELATIONSHIP]->(b:Entity) UNWIND [a,r,0,{_id:0},a] AS x RETURN DISTINCT x",
+        "rows": [
+          [
+            {
+              "kind": "node",
+              "labels": [
+                "Entity"
+              ],
+              "properties": {
+                "id": "entity:1",
+                "name": "Atlas"
+              }
+            }
+          ],
+          [
+            {
+              "kind": "relationship",
+              "properties": {
+                "predicate": "depends_on"
+              },
+              "source": "entity:1",
+              "target": "entity:2",
+              "type": "RELATIONSHIP"
+            }
+          ],
+          [
+            0
+          ],
+          [
+            {
+              "_id": 0
+            }
+          ]
+        ]
+      },
+      {
+        "query": "MATCH (a:Entity)-[r:RELATIONSHIP]->(b:Entity) RETURN a=a, a=b, a=r, a=0, r=r",
+        "rows": [
+          [
+            true,
+            false,
+            false,
+            false,
+            true
+          ]
+        ]
+      },
+      {
+        "query": "MATCH (a:Entity) RETURN CASE WHEN a.name='Atlas' THEN {v:a} ELSE [a] END AS mixed",
+        "rows": [
+          [
+            {
+              "v": {
+                "kind": "node",
+                "labels": [
+                  "Entity"
+                ],
+                "properties": {
+                  "id": "entity:1",
+                  "name": "Atlas"
+                }
+              }
+            }
+          ],
+          [
+            [
+              {
+                "kind": "node",
+                "labels": [
+                  "Entity"
+                ],
+                "properties": {
+                  "id": "entity:2",
+                  "name": "Roadmap"
+                }
+              }
+            ]
+          ]
+        ]
+      },
+      {
+        "query": "MATCH (a:Entity)-[r:RELATIONSHIP]->(b:Entity) RETURN a AS x UNION ALL MATCH (a:Entity)-[r:RELATIONSHIP]->(b:Entity) RETURN r AS x",
+        "rows": [
+          [
+            {
+              "kind": "node",
+              "labels": [
+                "Entity"
+              ],
+              "properties": {
+                "id": "entity:1",
+                "name": "Atlas"
+              }
+            }
+          ],
+          [
+            {
+              "kind": "relationship",
+              "properties": {
+                "predicate": "depends_on"
+              },
+              "source": "entity:1",
+              "target": "entity:2",
+              "type": "RELATIONSHIP"
+            }
+          ]
+        ]
+      }
+    ],
+    "semantic_row": [
+      {
+        "kind": "node",
+        "labels": [
+          "Entity"
+        ],
+        "properties": {
+          "id": "entity:1",
+          "name": "Atlas"
+        }
+      },
+      {
+        "kind": "relationship",
+        "properties": {
+          "predicate": "depends_on"
+        },
+        "source": "entity:1",
+        "target": "entity:2",
+        "type": "RELATIONSHIP"
+      },
+      {
+        "kind": "path",
+        "nodes": [
+          {
+            "kind": "node",
+            "labels": [
+              "Entity"
+            ],
+            "properties": {
+              "id": "entity:1",
+              "name": "Atlas"
+            }
+          },
+          {
+            "kind": "node",
+            "labels": [
+              "Entity"
+            ],
+            "properties": {
+              "id": "entity:2",
+              "name": "Roadmap"
+            }
+          }
+        ],
+        "relationships": [
+          {
+            "kind": "relationship",
+            "properties": {
+              "predicate": "depends_on"
+            },
+            "source": "entity:1",
+            "target": "entity:2",
+            "type": "RELATIONSHIP"
+          }
+        ]
+      },
+      [
+        {
+          "kind": "node",
+          "labels": [
+            "Entity"
+          ],
+          "properties": {
+            "id": "entity:1",
+            "name": "Atlas"
+          }
+        },
+        {
+          "kind": "relationship",
+          "properties": {
+            "predicate": "depends_on"
+          },
+          "source": "entity:1",
+          "target": "entity:2",
+          "type": "RELATIONSHIP"
+        },
+        7,
+        {
+          "edge": {
+            "kind": "relationship",
+            "properties": {
+              "predicate": "depends_on"
+            },
+            "source": "entity:1",
+            "target": "entity:2",
+            "type": "RELATIONSHIP"
+          },
+          "node": {
+            "kind": "node",
+            "labels": [
+              "Entity"
+            ],
+            "properties": {
+              "id": "entity:1",
+              "name": "Atlas"
+            }
+          }
+        }
+      ],
+      {
+        "_id": 0,
+        "_labels": [
+          "Entity"
+        ],
+        "id": "entity:1",
+        "name": "Atlas"
+      }
+    ]
+  },
+  "version_carriers": [
+    {
+      "blocked_writer": "pass",
+      "build_ms": 39.071917,
+      "carrier": "snapshot_envelope_v1",
+      "concurrent_readers": "pass",
+      "crash_after_activation": "detectable_sqlite_divergence",
+      "crash_before_activation": "old_complete",
+      "empty_graph": "pass",
+      "explicit_rebuild": "pass",
+      "file_bytes": 58463,
+      "fresh_process": {
+        "open_us": 1057,
+        "snapshot_bytes": 58407
+      },
+      "max_rss_bytes": 6651904,
+      "nodes": 2000,
+      "open_verify_ms": 0.9484667999999999,
+      "reopen": "pass",
+      "successful_commit": "pass",
+      "truncated_candidate": "rejected"
+    },
+    {
+      "blocked_writer": "pass",
+      "build_ms": 29.988625000000003,
+      "carrier": "native_catalog_v2",
+      "concurrent_readers": "pass",
+      "crash_after_activation": "detectable_sqlite_divergence",
+      "crash_before_activation": "old_complete",
+      "empty_graph": "pass",
+      "explicit_rebuild": "pass",
+      "file_bytes": 70715,
+      "fresh_process": {
+        "open_us": 1123,
+        "snapshot_bytes": 58427
+      },
+      "max_rss_bytes": 6848512,
+      "nodes": 2000,
+      "open_verify_ms": 2.1559999999999997,
+      "reopen": "pass",
+      "successful_commit": "pass",
+      "truncated_candidate": "rejected"
+    }
+  ]
+}

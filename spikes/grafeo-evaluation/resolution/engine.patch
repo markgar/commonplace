@@ -1,0 +1,363 @@
+--- a/grafeo-common-0.5.43/src/types/value.rs
++++ b/grafeo-common-0.5.43/src/types/value.rs
+@@ -14 +14 @@
+-use super::{Date, Duration, Time, Timestamp, ZonedDatetime};
++use super::{Date, Duration, Time, Timestamp, ZonedDatetime, NodeId, EdgeId};
+@@ -174,0 +175,4 @@
++    /// P2 prototype semantic query reference, distinct from a numeric property.
++    Node(NodeId),
++    /// P2 prototype semantic query reference, distinct from a numeric property.
++    Edge(EdgeId),
+@@ -362,0 +367,2 @@
++            Value::Node(_) => "NODE",
++            Value::Edge(_) => "EDGE",
+@@ -393,0 +400,2 @@
++            | Value::Node(_)
++            | Value::Edge(_)
+@@ -433,0 +442,2 @@
++            Value::Node(id) => write!(f, "Node({id})"),
++            Value::Edge(id) => write!(f, "Edge({id})"),
+@@ -475,0 +486,2 @@
++            Value::Node(id) => write!(f, "Node({id})"),
++            Value::Edge(id) => write!(f, "Edge({id})"),
+@@ -826,0 +839,2 @@
++            | Value::Node(_)
++            | Value::Edge(_)
+@@ -982,0 +997,2 @@
++        Value::Node(id) => id.hash(state),
++        Value::Edge(id) => id.hash(state),
+--- a/grafeo-core-0.5.43/src/execution/operators/filter.rs
++++ b/grafeo-core-0.5.43/src/execution/operators/filter.rs
+@@ -1761,3 +1761 @@
+-                    // reason: entity IDs stored as i64, standard encoding
+-                    #[allow(clippy::cast_possible_wrap)]
+-                    return Some(Value::Int64(edge.src.0 as i64));
++                    return Some(Value::Node(edge.src));
+@@ -1777,3 +1775 @@
+-                    // reason: entity IDs stored as i64, standard encoding
+-                    #[allow(clippy::cast_possible_wrap)]
+-                    return Some(Value::Int64(edge.dst.0 as i64));
++                    return Some(Value::Node(edge.dst));
+--- a/grafeo-core-0.5.43/src/execution/operators/join.rs
++++ b/grafeo-core-0.5.43/src/execution/operators/join.rs
+@@ -52,0 +53,4 @@
++    /// Distinct semantic graph identities.
++    Node(u64),
++    /// Distinct semantic graph identities.
++    Edge(u64),
+@@ -57,0 +62,6 @@
++            (HashKey::Node(a), HashKey::Node(b)) => a.cmp(b),
++            (HashKey::Node(_), _) => Ordering::Less,
++            (_, HashKey::Node(_)) => Ordering::Greater,
++            (HashKey::Edge(a), HashKey::Edge(b)) => a.cmp(b),
++            (HashKey::Edge(_), _) => Ordering::Less,
++            (_, HashKey::Edge(_)) => Ordering::Greater,
+@@ -96,0 +107,2 @@
++            Value::Node(id) => HashKey::Node(id.as_u64()),
++            Value::Edge(id) => HashKey::Edge(id.as_u64()),
+--- a/grafeo-core-0.5.43/src/execution/operators/mutation.rs
++++ b/grafeo-core-0.5.43/src/execution/operators/mutation.rs
+@@ -704,0 +705 @@
++                    Value::Node(id) => id,
+@@ -716,0 +718 @@
++                    Value::Node(id) => id,
+@@ -916,0 +919 @@
++                    Value::Node(id) => id,
+@@ -1073,0 +1077 @@
++                    Value::Edge(id) => id,
+@@ -1203,0 +1208 @@
++                    Value::Node(id) => id,
+@@ -1348,0 +1354 @@
++                    Value::Node(id) => id,
+--- a/grafeo-core-0.5.43/src/execution/operators/project.rs
++++ b/grafeo-core-0.5.43/src/execution/operators/project.rs
+@@ -7 +6,0 @@
+-use crate::graph::lpg::{Edge, Node};
+@@ -9 +8 @@
+-use std::collections::{BTreeMap, HashMap};
++use std::collections::HashMap;
+@@ -345 +344 @@
+-                            node.map_or(Value::Null, |n| node_to_map(&n))
++                            node.map_or(Value::Null, |n| Value::Node(n.id))
+@@ -376 +375 @@
+-                            edge.map_or(Value::Null, |e| edge_to_map(&e))
++                            edge.map_or(Value::Null, |e| Value::Edge(e.id))
+@@ -423,50 +421,0 @@
+-}
+-
+-/// Converts a [`Node`] to a `Value::Map` with metadata and properties.
+-///
+-/// The map contains `_id` (integer), `_labels` (list of strings), and
+-/// all node properties at the top level.
+-fn node_to_map(node: &Node) -> Value {
+-    let mut map = BTreeMap::new();
+-    // reason: entity IDs stored as i64, standard encoding
+-    #[allow(clippy::cast_possible_wrap)]
+-    let node_id_i64 = node.id.as_u64() as i64;
+-    map.insert(PropertyKey::new("_id"), Value::Int64(node_id_i64));
+-    let labels: Vec<Value> = node
+-        .labels
+-        .iter()
+-        .map(|l| Value::String(l.clone()))
+-        .collect();
+-    map.insert(PropertyKey::new("_labels"), Value::List(labels.into()));
+-    for (key, value) in &node.properties {
+-        map.insert(key.clone(), value.clone());
+-    }
+-    Value::Map(Arc::new(map))
+-}
+-
+-/// Converts an [`Edge`] to a `Value::Map` with metadata and properties.
+-///
+-/// The map contains `_id`, `_type`, `_source`, `_target`, and all edge
+-/// properties at the top level.
+-fn edge_to_map(edge: &Edge) -> Value {
+-    let mut map = BTreeMap::new();
+-    // reason: entity IDs stored as i64, standard encoding
+-    #[allow(clippy::cast_possible_wrap)]
+-    let edge_id_i64 = edge.id.as_u64() as i64;
+-    // reason: entity IDs stored as i64, standard encoding
+-    #[allow(clippy::cast_possible_wrap)]
+-    let src_id_i64 = edge.src.as_u64() as i64;
+-    // reason: entity IDs stored as i64, standard encoding
+-    #[allow(clippy::cast_possible_wrap)]
+-    let dst_id_i64 = edge.dst.as_u64() as i64;
+-    map.insert(PropertyKey::new("_id"), Value::Int64(edge_id_i64));
+-    map.insert(
+-        PropertyKey::new("_type"),
+-        Value::String(edge.edge_type.clone()),
+-    );
+-    map.insert(PropertyKey::new("_source"), Value::Int64(src_id_i64));
+-    map.insert(PropertyKey::new("_target"), Value::Int64(dst_id_i64));
+-    for (key, value) in &edge.properties {
+-        map.insert(key.clone(), value.clone());
+-    }
+-    Value::Map(Arc::new(map))
+@@ -719,14 +668 @@
+-        if let Value::Map(map) = value {
+-            assert_eq!(
+-                map.get(&PropertyKey::new("_id")),
+-                Some(&Value::Int64(node_id.as_u64() as i64))
+-            );
+-            assert!(map.get(&PropertyKey::new("_labels")).is_some());
+-            assert_eq!(
+-                map.get(&PropertyKey::new("name")),
+-                Some(&Value::String("Alix".into()))
+-            );
+-            assert_eq!(map.get(&PropertyKey::new("age")), Some(&Value::Int64(30)));
+-        } else {
+-            panic!("Expected Value::Map, got {:?}", value);
+-        }
++        assert_eq!(value, Value::Node(node_id));
+@@ -765,24 +701 @@
+-        if let Value::Map(map) = value {
+-            assert_eq!(
+-                map.get(&PropertyKey::new("_id")),
+-                Some(&Value::Int64(edge_id.as_u64() as i64))
+-            );
+-            assert_eq!(
+-                map.get(&PropertyKey::new("_type")),
+-                Some(&Value::String("WORKS_AT".into()))
+-            );
+-            assert_eq!(
+-                map.get(&PropertyKey::new("_source")),
+-                Some(&Value::Int64(src.as_u64() as i64))
+-            );
+-            assert_eq!(
+-                map.get(&PropertyKey::new("_target")),
+-                Some(&Value::Int64(dst.as_u64() as i64))
+-            );
+-            assert_eq!(
+-                map.get(&PropertyKey::new("since")),
+-                Some(&Value::Int64(2020))
+-            );
+-        } else {
+-            panic!("Expected Value::Map, got {:?}", value);
+-        }
++        assert_eq!(value, Value::Edge(edge_id));
+--- a/grafeo-core-0.5.43/src/execution/operators/variable_length_expand.rs
++++ b/grafeo-core-0.5.43/src/execution/operators/variable_length_expand.rs
+@@ -603,7 +603 @@
+-                            let signed = i64::try_from(id.0).map_err(|_| {
+-                                OperatorError::Execution(format!(
+-                                    "NodeId {} exceeds i64 range",
+-                                    id.0
+-                                ))
+-                            })?;
+-                            Ok(grafeo_common::types::Value::Int64(signed))
++                            Ok(grafeo_common::types::Value::Node(*id))
+@@ -623,7 +617 @@
+-                            let signed = i64::try_from(id.0).map_err(|_| {
+-                                OperatorError::Execution(format!(
+-                                    "EdgeId {} exceeds i64 range",
+-                                    id.0
+-                                ))
+-                            })?;
+-                            Ok(grafeo_common::types::Value::Int64(signed))
++                            Ok(grafeo_common::types::Value::Edge(*id))
+@@ -643,7 +631 @@
+-                            let signed = i64::try_from(id.0).map_err(|_| {
+-                                OperatorError::Execution(format!(
+-                                    "NodeId {} exceeds i64 range",
+-                                    id.0
+-                                ))
+-                            })?;
+-                            Ok(grafeo_common::types::Value::Int64(signed))
++                            Ok(grafeo_common::types::Value::Node(*id))
+@@ -658,7 +640 @@
+-                            let signed = i64::try_from(id.0).map_err(|_| {
+-                                OperatorError::Execution(format!(
+-                                    "EdgeId {} exceeds i64 range",
+-                                    id.0
+-                                ))
+-                            })?;
+-                            Ok(grafeo_common::types::Value::Int64(signed))
++                            Ok(grafeo_common::types::Value::Edge(*id))
+--- a/grafeo-core-0.5.43/src/execution/vector.rs
++++ b/grafeo-core-0.5.43/src/execution/vector.rs
+@@ -199,3 +199 @@
+-                // reason: entity IDs stored as i64, standard encoding
+-                #[allow(clippy::cast_possible_wrap)]
+-                vec.push(Value::Int64(value.as_u64() as i64));
++                vec.push(Value::Node(value));
+@@ -216,3 +214 @@
+-                // reason: entity IDs stored as i64, standard encoding
+-                #[allow(clippy::cast_possible_wrap)]
+-                vec.push(Value::Int64(value.as_u64() as i64));
++                vec.push(Value::Edge(value));
+@@ -243,0 +240,2 @@
++            (VectorData::NodeId(vec), Value::Node(id)) => vec.push(*id),
++            (VectorData::EdgeId(vec), Value::Edge(id)) => vec.push(*id),
+@@ -334,0 +333 @@
++                Some(Value::Node(id)) => Some(*id),
+@@ -353,0 +353 @@
++                Some(Value::Edge(id)) => Some(*id),
+@@ -375,15 +375,2 @@
+-            // reason: entity IDs stored as i64, standard encoding
+-            VectorData::NodeId(vec) => vec.get(index).map(|&v| {
+-                // reason: entity IDs are sequential counters, well within i64::MAX
+-                #[allow(clippy::cast_possible_wrap)]
+-                let val = Value::Int64(v.as_u64() as i64);
+-                val
+-            }),
+-            // reason: entity IDs stored as i64, standard encoding
+-            // reason: entity IDs are sequential counters, well within i64::MAX
+-            VectorData::EdgeId(vec) => vec.get(index).map(|&v| {
+-                // reason: entity IDs are sequential counters, well within i64::MAX
+-                #[allow(clippy::cast_possible_wrap)]
+-                let val = Value::Int64(v.as_u64() as i64);
+-                val
+-            }),
++            VectorData::NodeId(vec) => vec.get(index).copied().map(Value::Node),
++            VectorData::EdgeId(vec) => vec.get(index).copied().map(Value::Edge),
+--- a/grafeo-engine-0.5.43/src/catalog/mod.rs
++++ b/grafeo-engine-0.5.43/src/catalog/mod.rs
+@@ -29,0 +30 @@
++    pub(crate) application_metadata: RwLock<std::collections::BTreeMap<String, String>>,
+@@ -46,0 +48 @@
++            application_metadata: RwLock::new(std::collections::BTreeMap::new()),
+--- a/grafeo-engine-0.5.43/src/database/catalog_section.rs
++++ b/grafeo-engine-0.5.43/src/database/catalog_section.rs
+@@ -21 +21 @@
+-const CATALOG_SECTION_VERSION: u8 = 1;
++const CATALOG_SECTION_VERSION: u8 = 2;
+@@ -30,0 +31 @@
++    application_metadata: std::collections::BTreeMap<String, String>,
+@@ -176,0 +178 @@
++            application_metadata: self.catalog.application_metadata.read().clone(),
+@@ -184,0 +187,3 @@
++        if data.first() != Some(&CATALOG_SECTION_VERSION) {
++            return Err(Error::Serialization("prototype catalog version mismatch; no migration".into()));
++        }
+@@ -190,0 +196 @@
++        *self.catalog.application_metadata.write() = snapshot.application_metadata;
+--- a/grafeo-engine-0.5.43/src/database/mod.rs
++++ b/grafeo-engine-0.5.43/src/database/mod.rs
+@@ -2219,0 +2220,14 @@
++    /// Prototype candidate-only metadata; durability is established by close, not WAL commit.
++    pub fn set_application_metadata(&self, key: String, value: String) -> Result<()> {
++        if self.is_read_only() {
++            return Err(Error::Internal("cannot set metadata on read-only database".into()));
++        }
++        self.catalog.application_metadata.write().insert(key, value);
++        Ok(())
++    }
++
++    /// Prototype metadata independent of projected graph nodes.
++    pub fn application_metadata(&self, key: &str) -> Option<String> {
++        self.catalog.application_metadata.read().get(key).cloned()
++    }
++
+--- a/grafeo-engine-0.5.43/src/database/persistence.rs
++++ b/grafeo-engine-0.5.43/src/database/persistence.rs
+@@ -22 +22 @@
+-const SNAPSHOT_VERSION: u8 = 4;
++const SNAPSHOT_VERSION: u8 = 5;
+@@ -42,0 +43 @@
++    application_metadata: std::collections::BTreeMap<String, String>,
+@@ -395,0 +397 @@
++    *catalog.application_metadata.write() = schema.application_metadata.clone();
+@@ -421,0 +424 @@
++        application_metadata: catalog.application_metadata.read().clone(),
+@@ -942 +945 @@
+-        if version != 4 {
++        if version != SNAPSHOT_VERSION {
+@@ -944 +947 @@
+-                "unsupported snapshot version: {version} (expected 4)"
++                "unsupported prototype snapshot version: {version} (expected 5)"
+@@ -1029 +1032 @@
+-        if version != 4 {
++        if version != SNAPSHOT_VERSION {
+@@ -1031 +1034 @@
+-                "unsupported snapshot version: {version} (expected 4)"
++                "unsupported prototype snapshot version: {version} (expected 5)"
+--- a/grafeo-engine-0.5.43/src/session/mod.rs
++++ b/grafeo-engine-0.5.43/src/session/mod.rs
+@@ -3130,0 +3131,47 @@
++    /// Disposable P2 prototype: cap final result materialization without rewriting Cypher.
++    #[cfg(feature = "cypher")]
++    pub fn execute_cypher_bounded(
++        &self,
++        query: &str,
++        params: std::collections::HashMap<String, Value>,
++        row_cap: usize,
++    ) -> Result<QueryResult> {
++        use crate::query::{
++            binder::Binder, optimizer::Optimizer, processor::substitute_params,
++            translators::cypher,
++        };
++        use grafeo_common::utils::error::{Error, QueryError, QueryErrorKind};
++        let mut logical = match cypher::translate_full(query)? {
++            cypher::CypherTranslationResult::Plan(plan) => plan,
++            _ => {
++                self.require_permission(crate::auth::StatementKind::Admin)?;
++                return Err(Error::Query(QueryError::new(
++                    QueryErrorKind::Semantic, "prototype bounded API supports query plans only",
++                )));
++            }
++        };
++        if logical.root.has_mutations() {
++            self.require_permission(crate::auth::StatementKind::Write)?;
++            return Err(Error::Query(QueryError::new(
++                QueryErrorKind::Semantic, "bounded API does not execute writes",
++            )));
++        }
++        self.require_permission(crate::auth::StatementKind::Read)?;
++        let mut merged = logical.default_params.clone();
++        merged.extend(params);
++        substitute_params(&mut logical, &merged)?;
++        Binder::new().bind(&logical)?;
++        let active = self.active_store();
++        let optimized = Optimizer::from_graph_store(active.as_ref()).optimize(logical)?;
++        if optimized.explain || optimized.profile {
++            return Err(Error::Query(QueryError::new(
++                QueryErrorKind::Semantic, "prototype bounded API excludes EXPLAIN/PROFILE",
++            )));
++        }
++        let (epoch, transaction) = self.get_transaction_context();
++        let planner = self.create_planner_for_store(active, epoch, transaction);
++        let mut physical = planner.plan(&optimized)?;
++        self.make_executor(physical.columns.clone())
++            .execute_with_limit(physical.operator.as_mut(), row_cap)
++    }
++

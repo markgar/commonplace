@@ -1,0 +1,94 @@
+{
+  "packages": {
+    "grafeo-common-0.5.43": "780d7fb460139e5ba9d6062d679893b24c724129a174710bd62fd45dc51157d4",
+    "grafeo-core-0.5.43": "2c746c01145ab3c1a3a368c15012e1fdfc608c5d6cd27e158330c12d1f2d730e",
+    "grafeo-engine-0.5.43": "d6beb48085a410e875eb52dec6c7a18ad6e5e1e650ea21c457ccf40624120ca5"
+  },
+  "patch_sha256": "a6f37c48cad6e65a43d56cf11611e5179f70a94c3c87696093837ff9c58aa3a2",
+  "files": [
+    {
+      "path": "grafeo-common-0.5.43/src/types/value.rs",
+      "before_sha256": "ef7396d81b436c2a393a129fa513c4fcaee5e69acc513c054520a23ebea7e98b",
+      "after_sha256": "9ffa67f6d68c1677432408692d269ebf8eec01d2b45b37a7b604fe097ab04910",
+      "added": 17,
+      "removed": 1
+    },
+    {
+      "path": "grafeo-core-0.5.43/src/execution/operators/filter.rs",
+      "before_sha256": "7c86b1e6a638ec1003940f841fa8ce45f524249caf0b9024e3436b05945ea9ba",
+      "after_sha256": "b14ffb7f4f6ac81d5a408cb98eab57517aa297e263227555275aebbcf2717349",
+      "added": 2,
+      "removed": 6
+    },
+    {
+      "path": "grafeo-core-0.5.43/src/execution/operators/join.rs",
+      "before_sha256": "b01c23de2829fc698c3e9ece5c6ac8dd9f9bc25695da35d8ef52023b57e7029c",
+      "after_sha256": "237f622d61a0cd26bdd677c928024f8919a18fcc72e3c17d9bdc872040ccaf86",
+      "added": 12,
+      "removed": 0
+    },
+    {
+      "path": "grafeo-core-0.5.43/src/execution/operators/mutation.rs",
+      "before_sha256": "61b06ce1c12845e84fd9bec80e333712f26b6e1f9746ed24b623489819ae51f1",
+      "after_sha256": "7834b8c403db0ff35116e04477c81acdbf48708862f1a1eb2eb22739d60a33f6",
+      "added": 6,
+      "removed": 0
+    },
+    {
+      "path": "grafeo-core-0.5.43/src/execution/operators/project.rs",
+      "before_sha256": "36698753e4b5e677979a7dabea7d5696880658ef26de66f52f1d85cdf162f63e",
+      "after_sha256": "a87df74f46a2f5dfcbac3524971d5d6c3f99e317a18213e497e95baaf2dc268b",
+      "added": 5,
+      "removed": 92
+    },
+    {
+      "path": "grafeo-core-0.5.43/src/execution/operators/variable_length_expand.rs",
+      "before_sha256": "51f0c0ee60ba0412c9c93936be651e791426afb6ade84d7615cfe00d8c24bd07",
+      "after_sha256": "0bc5d0530f5dc566a5d075257d16cfd3d919d85f49c3a7afe0dc259116895e2e",
+      "added": 4,
+      "removed": 28
+    },
+    {
+      "path": "grafeo-core-0.5.43/src/execution/vector.rs",
+      "before_sha256": "5cbfce1f83b150f20622ad0c61120f4ba08a2e9b0085de29bcd303f207f3aff7",
+      "after_sha256": "613cacff71a315b6c3a6dc6f545968c70f5973e7ded310234542485271864242",
+      "added": 8,
+      "removed": 21
+    },
+    {
+      "path": "grafeo-engine-0.5.43/src/catalog/mod.rs",
+      "before_sha256": "40416d112a7c19e1a76d88994c49fb4c0a30e0c2552b94ca6ffbb4b3129118ca",
+      "after_sha256": "8a611ea08a72824c86086adba3da8d43818a7a1c97228c4417c52feee171e34f",
+      "added": 2,
+      "removed": 0
+    },
+    {
+      "path": "grafeo-engine-0.5.43/src/database/catalog_section.rs",
+      "before_sha256": "3d21f3fc76d4283adc20a5af79e57b2005f8bd238f385122981c3a14caa42911",
+      "after_sha256": "af96b95ede557b7d04bb4bf0f71231bb4caf78b651cf2da6337dcbbe19af3500",
+      "added": 7,
+      "removed": 1
+    },
+    {
+      "path": "grafeo-engine-0.5.43/src/database/mod.rs",
+      "before_sha256": "70ec49038172c0b874d4674d9d33df3366ead096d209efd4e5db0a11d6568d93",
+      "after_sha256": "2645e831d6278e1ada3eb31cc71b0e74273aa634fc1f8fb2a589943112393e10",
+      "added": 14,
+      "removed": 0
+    },
+    {
+      "path": "grafeo-engine-0.5.43/src/database/persistence.rs",
+      "before_sha256": "e3c361d5f004ceaedb1651d44719dc53818dd27c9b4a22c46c7a0293d96c935d",
+      "after_sha256": "32fbd9a22a45fe84e32c2569bfece6fbeb5832e13a3671a1a2396428fd3d0a26",
+      "added": 8,
+      "removed": 5
+    },
+    {
+      "path": "grafeo-engine-0.5.43/src/session/mod.rs",
+      "before_sha256": "ebfb1ff5e554ce2b7e905e3843577d753cde7190855ae5f05b5489d2fbc12f26",
+      "after_sha256": "8eb3bba799b2443c5cd312d7ed96ccd8db494dc788bfde8e4adec938a2ff77f2",
+      "added": 47,
+      "removed": 0
+    }
+  ]
+}

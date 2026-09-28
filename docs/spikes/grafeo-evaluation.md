@@ -1,5 +1,11 @@
 # Grafeo evaluation spike
 
+The [P2 resolution follow-up](grafeo-resolution.md) now demonstrates passing
+isolated prototypes for bounded Cypher, semantic result identity, and two durable
+version carriers. It recommends an adoption decision but does not change the
+unpatched gate below. The exact patch, regression harness, and recorded results
+are preserved separately.
+
 ## P2 local graph gate (2026-09-28 UTC)
 
 **GRAPH gate: BLOCKED.** Grafeo 0.5.43 remains the selected component

@@ -10,6 +10,10 @@ and reproduces bounded-materialization and semantic-value-tag blockers. The
 durable version carrier still needs an approved representation decision.
 Current CLI cancellation is process termination, not an external engine handle.
 
+The isolated [`resolution/` follow-up](resolution/README.md) demonstrates local
+engine changes for the three gaps and compares two version carriers. Its passing
+prototype probes do **not** change the unpatched gate or approve a fork/format.
+
 The canonical findings and platform evidence are recorded in
 [the Grafeo evaluation report](../../docs/spikes/grafeo-evaluation.md).
 
