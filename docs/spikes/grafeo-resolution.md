@@ -1,5 +1,12 @@
 # P2 graph resolution follow-up
 
+> **Historical experiment; recommendation superseded.** The user chose unmodified
+> Oxigraph rather than maintaining engine patches. The patches, native metadata
+> format, and snapshot envelope below are preserved only as investigation evidence,
+> never production dependencies or approved persistence formats. Follow the
+> [owning specifications](../specification/README.md) and
+> [stock Oxigraph evidence](oxigraph-evaluation.md), not the former recommendation.
+
 ## Decision summary
 
 **Unpatched Grafeo 0.5.43 GRAPH gate: BLOCKED. Patched local prototype:

@@ -1,5 +1,10 @@
 # Disposable P2 resolution prototype
 
+**Superseded, historical experiment.** The user chose stock Oxigraph, not a
+maintained Grafeo patch or either experimental durable format. Nothing in this
+directory is approved for production adoption. The retained patch and fixtures
+document why the investigation moved to [Oxigraph](../../oxigraph-evaluation/README.md).
+
 **Evidence only. Not a supported Grafeo release, production dependency, or
 approved durable format.** The unpatched graph gate remains blocked.
 The [resolution report](../../../docs/spikes/grafeo-resolution.md) separates

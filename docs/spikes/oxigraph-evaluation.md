@@ -1,5 +1,17 @@
 # P2 stock Oxigraph evaluation
 
+## Integration note
+
+This completed evidence is tracked in [P2 #13](https://github.com/markgar/commonplace/issues/13).
+The coordinated adoption specification revision
+`89b4cf64d64bbd3ee30f9236619406ac64d2f490` selects stock Oxigraph and **SELECT only**.
+The [specification index](../specification/README.md) and its owning documents
+override the original proposals below. ASK/CONSTRUCT/DESCRIBE and optional
+RDF 1.2 in this harness are capability experiments, not first-release commands.
+The compact SQLite/RDF fixture is not the complete production projection.
+Historical recommendations are retained without rerunning the completed spikes;
+this evidence PR contains no production engine or store-format implementation.
+
 ## Recommendation and gates
 
 **PASS on the local macOS arm64 host for the evaluated stock-Oxigraph graph

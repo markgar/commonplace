@@ -1,5 +1,11 @@
 # Grafeo evaluation spike
 
+> **Historical, non-production evidence.** The adopted direction is stock
+> Oxigraph with SPARQL SELECT; see the [specification index](../specification/README.md)
+> and [completed Oxigraph evaluation](oxigraph-evaluation.md). Grafeo failures and
+> provisional selections below describe the earlier investigation, not a current
+> implementation instruction. Do not adopt the experimental Grafeo patches.
+
 The [P2 resolution follow-up](grafeo-resolution.md) now demonstrates passing
 isolated prototypes for bounded Cypher, semantic result identity, and two durable
 version carriers. It recommends an adoption decision but does not change the

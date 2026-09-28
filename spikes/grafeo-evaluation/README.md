@@ -1,5 +1,10 @@
 # Grafeo evaluation spike
 
+**Historical only.** Stock Oxigraph is the adopted direction; this harness and
+its patched `resolution/` experiment are not production backends. Preserve their
+evidence, but use the [Oxigraph spike](../oxigraph-evaluation/README.md) and
+[owning specifications](../../docs/specification/README.md) for current work.
+
 This disposable harness evaluates Grafeo as a cross-platform replacement for
 LadybugDB. It tests the Commonplace graph shape, Cypher queries, persistence,
 read-only enforcement, and query deadlines.

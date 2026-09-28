@@ -1,5 +1,12 @@
 # Rust runtime spike
 
+**Historical combined Grafeo executable.** Current selected-runtime evidence
+lives in the [stock Oxigraph spike](../oxigraph-evaluation/README.md). Its harness
+reuses this directory's immutable model manifest, bytes-only model loader, and
+SQLite checks; it does not adopt this directory's Grafeo dependency or old
+packaging helpers. Reproduction commands below preserve historical evidence,
+not a request to repeat completed P2 work.
+
 Disposable local-only combined Grafeo, SQLite/FTS5, sqlite-vec, embedding and
 reranking preflight. Not production infrastructure. See
 [the report](../../docs/spikes/rust-packaging.md) for separate gate outcomes.

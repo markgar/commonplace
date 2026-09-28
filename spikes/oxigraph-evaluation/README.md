@@ -1,5 +1,11 @@
 # Stock Oxigraph P2 evaluation
 
+**Integration scope:** the adopted first-release contract is SPARQL SELECT only;
+follow the [owning specifications](../../docs/specification/README.md).
+ASK/CONSTRUCT and optional RDF 1.2 below are retained capability probes, not
+production features. P2 [tracker #13](https://github.com/markgar/commonplace/issues/13)
+owns integration progress; no repeat feasibility run is needed for that handoff.
+
 Local-only disposable spike, **not a production backend or specification change**.
 It evaluates unmodified published Oxigraph 0.5.11 as a possible replacement for
 Grafeo. Baseline features: `default-features = false`, `rocksdb` only. The

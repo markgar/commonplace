@@ -1,5 +1,12 @@
 # Rust packaging spike
 
+> **Historical Grafeo combined harness; model evidence remains reusable.**
+> The selected-runtime combined local PASS is now recorded in the
+> [Oxigraph evaluation](oxigraph-evaluation.md). Grafeo blockers and earlier
+> Ladybug/platform results below are historical, not production selections or
+> evidence for untested Oxigraph targets. Immutable model identities and cache
+> conventions remain shared with the Oxigraph spike.
+
 ## P2 local integrated preflight (2026-09-28 UTC)
 
 **INFERENCE gate: PASS on macOS arm64 only. GRAPH gate: BLOCKED.** The current
