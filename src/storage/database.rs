@@ -15,6 +15,8 @@ use crate::{CommonplaceError, Result};
 
 pub const STORE_FORMAT: &str = "commonplace-store/2";
 
+const READ_BUSY_TIMEOUT: Duration = Duration::from_secs(2);
+
 static REGISTER_SQLITE_VEC: Once = Once::new();
 
 type SqliteExtensionEntry = unsafe extern "C" fn(
@@ -138,6 +140,9 @@ impl SqliteDatabase {
         }
 
         let connection = open_connection(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        connection
+            .busy_timeout(READ_BUSY_TIMEOUT)
+            .map_err(storage_error)?;
         connection
             .execute_batch("BEGIN DEFERRED")
             .map_err(storage_error)?;

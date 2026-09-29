@@ -79,12 +79,20 @@ execution input, without remote schema resolution. Stateful additive checks run
 identically for `--check` and apply.
 
 Stores are validated before writing, without migration or automatic repair.
-Writers use a process-level lock with a default two-second wait; contention
-returns `conflict` (exit 3). Invalid input and input limits return exit 2; internal
-failures return exit 1. Execution failures are JSON on stderr; successes are JSON
-on stdout. Argument syntax errors use the standard CLI usage diagnostics.
-Checks and reads use consistent read-only SQLite snapshots and create no
-application-owned lock state; SQLite may maintain its own WAL/SHM sidecars.
+Concurrent SQLite-backed reads use consistent read-only snapshots. A read may
+wait up to two seconds for transient SQLite WAL recovery or lock setup, but
+Commonplace does not replay the command or retry any mutation. Read-snapshot
+setup can therefore add its own bounded wait before a write command reaches the
+separate process-level writer lock. That writer lock has a default two-second
+wait; contention returns `conflict` (exit 3). Agents should still serialize
+mutations and avoid unbounded read fan-out.
+
+SQLite reads create no application-owned lock state; SQLite may maintain its own
+WAL/SHM sidecars. Graph queries additionally hold the shared graph publication
+lease described below, separately from SQLite and the writer lock. Invalid input
+and input limits return exit 2; internal failures return exit 1. Execution
+failures are JSON on stderr; successes are JSON on stdout. Argument syntax errors
+use the standard CLI usage diagnostics.
 Schema/ingest descriptions never open the store; record descriptions read current
 vocabulary. Vocabulary operations neither load inference
 nor open or rebuild Oxigraph, and remain available when derived graph state is
