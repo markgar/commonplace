@@ -3,7 +3,7 @@ use serde::Serialize;
 use super::input::Description;
 use crate::CommonplaceError;
 use crate::app::init::InitResult;
-use crate::app::schema::ApplyResult;
+use crate::app::schema::{ApplyResult, FreezeResult};
 use crate::domain::schema::Vocabulary;
 
 const CONTRACT_VERSION: &str = "1";
@@ -24,6 +24,7 @@ pub enum CommandResult {
     GraphRebuild(crate::app::graph::RebuildResult),
     Init(InitResult),
     Apply(ApplyResult),
+    Freeze(FreezeResult),
     Vocabulary(Vocabulary),
     Description(Description),
     IngestDescription(super::ingest::IngestDescription),

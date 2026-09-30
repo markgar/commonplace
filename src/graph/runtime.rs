@@ -276,9 +276,7 @@ fn remove_scratch(path: &Path) -> Result<()> {
 }
 
 fn sync_directory(path: &Path) -> Result<()> {
-    File::open(path)
-        .and_then(|file| file.sync_all())
-        .map_err(graph_error)
+    crate::storage::sync_directory(path).map_err(graph_error)
 }
 
 fn activate(

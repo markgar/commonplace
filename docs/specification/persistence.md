@@ -240,6 +240,48 @@ vocabulary change, including adding a predicate endpoint, increments
 `schema_version` once. New terms record that version. A no-op application
 returns `unchanged` and leaves the version unchanged.
 
+### 7.1 Permanent schema freeze marker
+
+An initialized store may contain this optional final file:
+
+```text
+schema-freeze.json
+```
+
+Its exact UTF-8 bytes are compact JSON followed by LF:
+
+```json
+{"format":"commonplace-schema-freeze/1","schema_version":N}
+```
+
+`N` is a nonnegative signed-64-bit integer equal to authoritative SQLite
+`store_state.schema_version`. Unknown fields, malformed JSON or UTF-8, an unknown
+format, a negative/out-of-range version, a non-regular final path, or a version
+different from SQLite is invalid freeze state. Commonplace never modifies,
+removes, replaces, or bypasses a final marker.
+
+Marker absence means an existing compatible version-2 store is unfrozen. This
+optional capability requires no SQLite/configuration migration or store-format
+change. The marker duplicates no vocabulary and records no knowledge version or
+timestamp.
+
+Creation uses the single store-root scratch path
+`.schema-freeze.pending`. While holding the writer lock, freeze removes only
+that named non-authoritative scratch path, creates it with create-new semantics,
+writes and synchronizes the complete bytes, renames it atomically to the final
+path, and synchronizes the store directory. A retry never promotes existing
+pending bytes. Any pending path makes schema write state uncertain and blocks
+every non-check schema application until `schema freeze` completes or confirms
+the permanent final state. Freeze removes a file, symlink, or empty directory at
+the reserved pending path without following symlinks. A nonempty directory or
+other removal failure is explicit and must be cleared before retry; it never
+causes Commonplace to alter the final marker.
+
+A valid final marker at the current SQLite version blocks effective vocabulary
+changes but permits a non-check no-op. Invalid final state blocks every non-check
+schema application, including a no-op. `schema show` and check-mode application
+remain SQLite-authoritative reads and do not require a valid marker.
+
 ## 8. Entities and identity
 
 ```sql
@@ -417,7 +459,10 @@ The workflow:
 
 One transaction validates and inserts all requested vocabulary changes, then
 increments `schema_version` once when any term or endpoint row is added. A no-op
-returns `unchanged`.
+returns `unchanged`. Non-check application performs the section 7.1 freeze-state
+check under the same process writer lock before mutation. Freeze itself reads
+the current version without changing SQLite and publishes only the durable
+store-local marker.
 
 ### Knowledge authoring and withdrawal
 
@@ -583,6 +628,10 @@ Graph paths relative to the store are fixed:
 | `graph/candidate/` | Temporary complete replacement built from one SQLite snapshot |
 | `graph/previous/` | Temporary pre-activation database retained through SQLite commit |
 | `graph/publication.lock` | Stable application lock outside all renamed directories |
+
+The store root may also contain `schema-freeze.json` and the transient
+`.schema-freeze.pending` path defined in section 7.1. They are independent of
+the derived graph layout and neither is opened by graph workflows.
 
 `init` creates an empty default graph and version-zero metadata with matching
 SQLite/configuration formats. Its JSON response field names remain unchanged;

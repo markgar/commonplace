@@ -322,7 +322,34 @@ apply_knowledge_schema(context, request)
 
 The workflow validates additive changes and endpoint compatibility, writes the
 vocabulary, and increments `schema_version`. Schema terms unused by active
-knowledge do not need graph projection.
+knowledge do not need graph projection. A non-check application takes the
+process writer lock before inspecting freeze state and SQLite. A valid matching
+freeze marker rejects an effective plan but preserves the existing no-op result.
+Any pending, malformed, unknown, non-regular, or version-inconsistent marker
+state rejects every non-check application. Check mode remains a read-only
+prospective validation and does not inspect or create writer-lock or marker
+state.
+
+### 6.4a Freeze schema
+
+```text
+freeze_knowledge_schema(context)
+```
+
+The workflow validates the initialized store, takes the normal bounded writer
+lock, reads the current SQLite schema version, and confirms or creates the
+store-local permanent freeze marker. Creation uses one named pending file:
+create-new, write the exact marker bytes, flush and synchronize the file,
+atomically rename it to the final path, then synchronize the store directory.
+Existing pending bytes are never promoted; retry removes only that named scratch
+path and rewrites the complete sequence.
+
+A valid final marker is never modified. Repeat freeze revalidates its version,
+removes any named pending scratch, synchronizes the store directory, and returns
+unchanged. A post-rename directory-sync failure is explicit and tells the caller
+to rerun the idempotent command. A detected response-write failure includes the
+committed schema version and the same retry guidance. The workflow changes no
+SQLite row or version and never opens or locks Oxigraph.
 
 ### 6.5 Record knowledge
 
@@ -462,6 +489,11 @@ The writer lock:
 When writers contend, one waits for the bounded lock interval or receives a
 clear busy or conflict error and can rerun.
 
+Schema freeze and non-check schema apply hold this same writer lock while
+inspecting final/pending marker state and SQLite so an interrupted freeze cannot
+be overtaken by a schema mutation. `schema show` and `schema apply --check`
+remain read-only and available during writer contention.
+
 A separate graph publication lock protects graph-directory lifetime. A graph query
 holds it in shared mode from opening the graph through closing both its result
 and store handle; an iterator may retain a native storage snapshot after the
@@ -526,6 +558,10 @@ document failures are per-item errors and may produce `partial`; schema,
 knowledge, and withdrawal requests return one success or failure for the
 complete request. Workflows do not catch broad errors or return success-shaped
 fallbacks.
+
+Freeze-marker conflicts use `conflict`. Filesystem or durability failures use
+`internal_error` with explicit safe-retry guidance; a successful final marker is
+never silently removed or rewritten.
 
 ## 11. Configuration
 

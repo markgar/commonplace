@@ -6,6 +6,170 @@ use common::{LockHolder, Store};
 use serde_json::{Value, json};
 
 #[test]
+fn freeze_is_permanent_repeatable_and_preserves_read_only_schema_operations() {
+    let store = Store::new();
+    store.apply(&Store::vocabulary(), false);
+    let before_vocabulary = store.success(&["schema", "show"])["result"].clone();
+    let before_graph = store.graph_files();
+    let frozen = store.freeze();
+    assert_eq!(
+        frozen,
+        json!({
+            "operation":"schema.freeze", "contract_version":"1", "status":"complete",
+            "result":{"schema_version":1,"frozen":true}
+        })
+    );
+    let marker = store.root.join("schema-freeze.json");
+    assert_eq!(
+        std::fs::read(&marker).unwrap(),
+        b"{\"format\":\"commonplace-schema-freeze/1\",\"schema_version\":1}\n"
+    );
+    let marker_before = std::fs::read(&marker).unwrap();
+
+    let additions = json!({
+        "entity_types":[{"name":"team"}],
+        "identifier_schemes":[{"name":"team_id"}],
+        "predicates":[
+            {"name":"works_at","object_kind":"entity","subject_types":["person","company"],"object_types":["company"]},
+            {"name":"team_name","object_kind":"string","subject_types":["team"]}
+        ]
+    });
+    let path = store.input(&additions);
+    let failure = store.failure(
+        &["schema", "apply", path.to_str().unwrap(), "--json"],
+        "conflict",
+        3,
+    );
+    assert!(
+        failure["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("create a fresh store")
+    );
+    assert_eq!(
+        store.success(&["schema", "show"])["result"],
+        before_vocabulary
+    );
+    let checked = store.apply(&additions, true);
+    assert_eq!(checked["status"], "checked");
+    assert_eq!(checked["result"]["schema_version"], 1);
+    assert_eq!(checked["result"]["projected_schema_version"], 2);
+    assert_eq!(checked["result"]["changed"], true);
+    assert_eq!(
+        store.apply(&Store::vocabulary(), false)["status"],
+        "unchanged"
+    );
+
+    let repeated = store.freeze();
+    assert_eq!(repeated["status"], "unchanged");
+    assert_eq!(
+        repeated["result"],
+        json!({"schema_version":1,"frozen":true})
+    );
+    assert_eq!(std::fs::read(&marker).unwrap(), marker_before);
+    assert_eq!(store.graph_files(), before_graph);
+    let database = store.database();
+    assert_eq!(
+        database
+            .query_row(
+                "SELECT schema_version, knowledge_version FROM store_state",
+                [],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+            )
+            .unwrap(),
+        (1, 0)
+    );
+}
+
+#[test]
+fn freeze_supports_version_zero_and_replaces_pending_scratch() {
+    for pending in [
+        b"{".as_slice(),
+        b"{\"format\":\"commonplace-schema-freeze/1\",\"schema_version\":0}\n".as_slice(),
+        b"{\"format\":\"commonplace-schema-freeze/1\",\"schema_version\":99}\n".as_slice(),
+    ] {
+        let store = Store::new();
+        std::fs::write(store.root.join(".schema-freeze.pending"), pending).unwrap();
+        let path = store.input(&json!({}));
+        store.failure(&["schema", "apply", path.to_str().unwrap()], "conflict", 3);
+        assert_eq!(store.freeze()["result"]["schema_version"], 0);
+        assert!(!store.root.join(".schema-freeze.pending").exists());
+        assert_eq!(
+            std::fs::read(store.root.join("schema-freeze.json")).unwrap(),
+            b"{\"format\":\"commonplace-schema-freeze/1\",\"schema_version\":0}\n"
+        );
+        assert_eq!(store.apply(&json!({}), false)["status"], "unchanged");
+    }
+}
+
+#[test]
+fn freeze_replaces_empty_directory_and_symlink_pending_scratch() {
+    let store = Store::new();
+    std::fs::create_dir(store.root.join(".schema-freeze.pending")).unwrap();
+    assert_eq!(store.freeze()["status"], "complete");
+    assert!(!store.root.join(".schema-freeze.pending").exists());
+
+    #[cfg(unix)]
+    {
+        let store = Store::new();
+        let target = store.directory.path().join("outside");
+        std::fs::write(&target, b"keep").unwrap();
+        std::os::unix::fs::symlink(&target, store.root.join(".schema-freeze.pending")).unwrap();
+        assert_eq!(store.freeze()["status"], "complete");
+        assert_eq!(std::fs::read(target).unwrap(), b"keep");
+        assert!(!store.root.join(".schema-freeze.pending").exists());
+    }
+}
+
+#[test]
+fn invalid_final_markers_fail_schema_writes_but_not_show_or_check() {
+    for marker in [
+        b"{".as_slice(),
+        b"{\"format\":\"future\",\"schema_version\":0}\n".as_slice(),
+        b"{\"format\":\"commonplace-schema-freeze/1\",\"schema_version\":1}\n".as_slice(),
+        b"{ \"format\":\"commonplace-schema-freeze/1\", \"schema_version\":0 }\n".as_slice(),
+        b"{\"format\":\"commonplace-schema-freeze/1\",\"schema_version\":0,\"extra\":true}\n"
+            .as_slice(),
+    ] {
+        let store = Store::new();
+        std::fs::write(store.root.join("schema-freeze.json"), marker).unwrap();
+        assert_eq!(
+            store.success(&["schema", "show"])["result"]["schema_version"],
+            0
+        );
+        assert_eq!(store.apply(&json!({}), true)["status"], "checked");
+        let path = store.input(&json!({}));
+        store.failure(&["schema", "apply", path.to_str().unwrap()], "conflict", 3);
+        store.failure(&["schema", "freeze"], "conflict", 3);
+    }
+}
+
+#[test]
+fn non_regular_freeze_paths_fail_closed() {
+    let store = Store::new();
+    std::fs::create_dir(store.root.join("schema-freeze.json")).unwrap();
+    assert_eq!(
+        store.success(&["schema", "show"])["result"]["schema_version"],
+        0
+    );
+    let path = store.input(&json!({}));
+    store.failure(&["schema", "apply", path.to_str().unwrap()], "conflict", 3);
+    store.failure(&["schema", "freeze"], "conflict", 3);
+}
+
+#[test]
+fn final_marker_with_pending_scratch_fails_closed_until_freeze_confirms_it() {
+    let store = Store::new();
+    store.freeze();
+    std::fs::write(store.root.join(".schema-freeze.pending"), b"stale").unwrap();
+    let path = store.input(&json!({}));
+    store.failure(&["schema", "apply", path.to_str().unwrap()], "conflict", 3);
+    assert_eq!(store.freeze()["status"], "unchanged");
+    assert!(!store.root.join(".schema-freeze.pending").exists());
+    assert_eq!(store.apply(&json!({}), false)["status"], "unchanged");
+}
+
+#[test]
 fn apply_reopen_noop_and_endpoint_only_versioning() {
     let store = Store::new();
     let graph = store.graph_files();
@@ -315,6 +479,23 @@ fn writer_contention_is_bounded_and_termination_releases_lock() {
         store.apply(&Store::vocabulary(), false)["result"]["schema_version"],
         1
     );
+}
+
+#[test]
+fn freeze_uses_the_bounded_writer_lock() {
+    let store = Store::new();
+    let holder = LockHolder::start(&store);
+    assert_eq!(
+        store.success(&["schema", "show"])["result"]["schema_version"],
+        0
+    );
+    assert_eq!(store.apply(&json!({}), true)["status"], "checked");
+    let start = Instant::now();
+    store.failure(&["schema", "freeze"], "conflict", 3);
+    assert!(start.elapsed() >= Duration::from_secs(2));
+    assert!(start.elapsed() < Duration::from_secs(6));
+    drop(holder);
+    assert_eq!(store.freeze()["status"], "complete");
 }
 
 #[test]

@@ -338,10 +338,26 @@ Schema operations include validation without mutation:
 commonplace schema apply schema.json --check --json
 commonplace schema apply schema.json --json
 commonplace schema show --json
+commonplace schema freeze --json
 ```
 
 Schema application changes SQLite only. It does not rebuild Oxigraph because the
 graph projects only vocabulary referenced by active knowledge.
+
+`schema freeze` permanently freezes the current vocabulary for that initialized
+store. The first successful freeze and every repeat leave `schema_version` and
+`knowledge_version` unchanged and do not open or modify Oxigraph. A valid frozen
+store rejects every effective non-check schema application with `conflict` and
+guidance to create a fresh store for a different vocabulary. A non-check no-op
+remains `unchanged`; `schema show` and `schema apply --check` remain available.
+Invalid or uncertain freeze-marker state rejects every non-check schema
+application, including a no-op, until `schema freeze` can confirm the permanent
+state.
+
+Freeze is a one-way accidental-change guardrail enforced by Commonplace, not an
+authorization boundary against a process that can edit the database or store
+files directly. Commonplace provides no unfreeze, bypass, vocabulary removal,
+replacement, or migration operation.
 
 The physical SQLite schema and RDF mapping remain generic. User vocabulary is data,
 not generated database DDL.
@@ -714,6 +730,7 @@ commonplace remove
 commonplace search
 commonplace schema show
 commonplace schema apply
+commonplace schema freeze
 commonplace record
 commonplace withdraw
 commonplace get
@@ -753,6 +770,12 @@ subtype, schema version, creation/withdrawal provenance, and exact support,
 including an empty support array. Missing supported IDs yield `not_found`.
 
 `commonplace schema show` returns the complete user vocabulary from SQLite.
+`commonplace schema freeze` returns
+`{"schema_version":N,"frozen":true}` in the common envelope. Its first success
+has status `complete`; a repeated confirmed freeze has status `unchanged`.
+If delivery is uncertain, callers rerun the same idempotent command. A retry
+confirms the existing final marker and completes required directory durability
+before returning unchanged.
 `commonplace graph schema` returns the stable RDF mapping, reserved namespaces
 and metadata graph, canonical ID mapping, property names, datatypes, evidence
 fields, and example read-only SPARQL SELECT patterns. Standard
@@ -818,6 +841,7 @@ Commonplace does not include:
 - first-class mention records;
 - domain-specific built-in record kinds;
 - schema proposal, approval, or administrator workflows;
+- schema unfreeze, bypass, removal, replacement, retirement, or migration;
 - competing type claims or classification-selection workflows;
 - record-supersession graphs;
 - generated tables for user vocabulary;
