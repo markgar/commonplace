@@ -66,21 +66,74 @@ modify a linked model; use an independent disposable copy for corruption checks.
 
 ## Stable local installation and persistent store
 
-`USAGE.txt` inside the archive is a self-contained install guide. The following
-uses only standard macOS utilities, requires no administrator access, and
-refuses to replace an existing installation. Start after extraction and checksum
-verification above:
+Use the repository-owned installer directly on the archive. It requires native
+macOS arm64, Python 3.11+ and standard macOS tools, but does not use the network,
+GitHub, `gh`, Cargo, a compiler or administrator access:
 
 ```sh
-release_dir="$HOME/.local/share/commonplace/releases/$(basename "$bundle")"
-bin="$HOME/.local/bin/commonplace"
-test ! -e "$release_dir" && test ! -e "$bin" || exit 1
-mkdir -p "$(dirname "$release_dir")" "$(dirname "$bin")"
-cp -R "$bundle" "$release_dir"
-install -m 755 "$release_dir/commonplace" "$bin"
-(cd "$release_dir" && shasum -a 256 -c SHA256SUMS)
-cmp "$release_dir/commonplace" "$bin"
+archive=/absolute/path/to/commonplace-<version>-<commit>-macos-arm64.tar.gz
+python3 scripts/install-local-macos.py "$archive"
 ```
+
+The installer requires the adjacent `.sha256` sidecar, validates the archive
+before extraction, rejects links/special files/path traversal, verifies the
+bundle inventory and checksums, provenance, executable architecture/signature,
+version and command surface, and then installs:
+
+```text
+~/.local/share/commonplace/releases/<release-id>/
+~/.local/bin/commonplace
+~/.local/share/commonplace/installed-release.json
+```
+
+The release ID is the package's existing
+`commonplace-<version>-<source-commit-prefix>-macos-arm64` bundle name. Release
+contents are read-only and never replaced. An exact existing release is fully
+reverified and reused; conflicting contents fail explicitly. Earlier releases
+are preserved.
+
+The stable executable is copied from the verified immutable release, fsynced and
+atomically replaced. The strict receipt is written last with its own atomic
+replace. Inspect it with:
+
+```sh
+python3 -m json.tool "$HOME/.local/share/commonplace/installed-release.json"
+shasum -a 256 "$HOME/.local/bin/commonplace"
+```
+
+The receipt records its format, package version, full source commit, release ID
+and absolute path, executable path/hash, archive hash, installation timestamp,
+platform and architecture. It is operational installation metadata, not a claim
+that the source commit equals the current GitHub `main`.
+
+Reinstalling the exact archive reverifies it and returns success without
+rewriting the executable, receipt or timestamp. A different verified archive
+publishes a new immutable release and atomically updates the stable executable
+and receipt. Existing stores, configuration, reports, replay inputs and earlier
+releases are not changed or removed.
+
+Failures before executable activation preserve the prior executable and receipt;
+a completely verified immutable release may remain for retry. If activation
+succeeds but a later smoke, fsync or receipt step fails, the installer reports a
+partial/uncertain installation and prints exact inspection and same-archive
+retry guidance. Retry that archive before attempting another one. The installer
+recognizes only an executable that exactly matches the verified incoming
+archive as recoverable; unmanaged or otherwise mismatched state fails closed.
+There is no automatic rollback or retention cleanup.
+
+The installer also recognizes the one strict
+`commonplace-manual-install/1` receipt created for the existing current-main
+manual installation. It verifies that receipt's exact fields and HOME-relative
+paths, the stable executable hash, and the preserved manual release's sole
+executable before adopting it. The first verified archive update leaves the
+manual release untouched and replaces the stable executable and receipt with
+the canonical `commonplace-installed-release/1` state. Malformed, mismatched or
+other legacy receipt formats fail closed; this is not a general migration
+framework.
+
+`USAGE.txt` inside the archive points to this one supported installer path; it is
+not a second manual copy recipe. The installer script may be supplied alongside
+the archive and requires no live checkout or GitHub access while it runs.
 
 The executable is now the stable path `$HOME/.local/bin/commonplace`, not a
 worktree, `target`, temporary-directory or Copilot-session binary. The versioned
@@ -89,6 +142,10 @@ terminal or local agent process, provide the existing environment variables:
 
 ```sh
 export PATH="$HOME/.local/bin:$PATH"
+receipt="$HOME/.local/share/commonplace/installed-release.json"
+release_dir=$(python3 -c \
+  'import json,sys; print(json.load(open(sys.argv[1]))["release_path"])' \
+  "$receipt")
 export COMMONPLACE_MODEL_CACHE="$release_dir/pinned-models"
 store="$HOME/.local/share/commonplace/stores/personal"
 commonplace --store "$store" init
@@ -101,10 +158,26 @@ assuming that its shell still has `release_dir`. Agents may instead invoke the
 absolute executable and set `COMMONPLACE_MODEL_CACHE` explicitly in their
 process environment; no shell profile or new configuration file is required.
 The user store is a separate persistent directory, never part of a release
-archive or replacement operation. Keep the archive/checksum and do not silently
-overwrite an existing installation or mutate/migrate an incompatible store.
-The local validation installs into a disposable isolated HOME using these same
-paths; it does not install into the developer's real HOME or personal store.
+archive or replacement operation. Keep the archive/checksum. The installer does
+not mutate or migrate an incompatible store and does not edit shell profiles;
+`~/.local/bin` must already be on `PATH`, or agents may use the absolute
+executable path.
+
+Installer tests and actual-package validation set `HOME` to a fresh temporary
+directory and use these same paths. They never install into the developer's real
+home or personal store:
+
+```sh
+test_home=$(mktemp -d /tmp/commonplace-install-home.XXXXXX)
+HOME="$test_home" python3 scripts/install-local-macos.py "$archive"
+HOME="$test_home" "$test_home/.local/bin/commonplace" --version
+HOME="$test_home" python3 -m json.tool \
+  "$test_home/.local/share/commonplace/installed-release.json"
+```
+
+This remains repeatable developer-host installation evidence. It does not prove
+independent clean-target execution, signing/notarization, public release
+publication, or completion of #22.
 
 ## Run the extracted binary, not Cargo's binary
 
