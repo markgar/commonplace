@@ -458,9 +458,9 @@ def copy_release(bundle: Path, release: Path, checksums: dict[PurePosixPath, str
             descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with source.open("rb") as input_file, os.fdopen(descriptor, "wb") as output_file:
                 shutil.copyfileobj(input_file, output_file, 1024 * 1024)
+                os.fchmod(output_file.fileno(), immutable_mode(relative))
                 output_file.flush()
                 os.fsync(output_file.fileno())
-            destination.chmod(immutable_mode(relative))
         require(bundle_files(staging) == bundle_files(bundle),
                 "staged release inventory changed during copy")
         for relative in sorted(bundle_files(staging), key=str):
@@ -677,9 +677,9 @@ def activate_executable(
     try:
         with source.open("rb") as input_file, os.fdopen(descriptor, "wb") as output_file:
             shutil.copyfileobj(input_file, output_file, 1024 * 1024)
+            os.fchmod(output_file.fileno(), 0o755)
             output_file.flush()
             os.fsync(output_file.fileno())
-        staging.chmod(0o755)
         require(sha256(staging) == expected_hash, "staged stable executable checksum mismatch")
         replace(staging, destination)
     except OSError as error:
@@ -707,9 +707,9 @@ def publish_receipt(
     try:
         with os.fdopen(descriptor, "wb") as output:
             output.write(bytes_value)
+            os.fchmod(output.fileno(), 0o644)
             output.flush()
             os.fsync(output.fileno())
-        staging.chmod(0o644)
         replace(staging, receipt_path)
         fsync_directory(receipt_path.parent)
     except OSError as error:
@@ -731,9 +731,9 @@ def publish_pending(
     try:
         with os.fdopen(descriptor, "wb") as output:
             output.write(bytes_value)
+            os.fchmod(output.fileno(), 0o644)
             output.flush()
             os.fsync(output.fileno())
-        staging.chmod(0o644)
         replace(staging, pending_path)
         fsync_directory(pending_path.parent)
     except OSError as error:
