@@ -47,14 +47,15 @@ esac
 """
 
 
-def make_package(root, *, version="0.1.0", commit_char="a", extra_file=False,
-                 extra_directory=False, missing_usage=False, bad_bundle_checksum=False):
+def make_package(root, *, version="0.1.0", commit_char="a", executable_marker=None,
+                 extra_file=False, extra_directory=False, missing_usage=False,
+                 bad_bundle_checksum=False):
     commit = commit_char * 40
     release_id = f"commonplace-{version}-{commit[:12]}-macos-arm64"
     bundle = root / release_id
     (bundle / "pinned-models" / "revision").mkdir(parents=True)
     executable = bundle / "commonplace"
-    executable.write_text(executable_text(version, commit))
+    executable.write_text(executable_text(version, executable_marker or commit))
     executable.chmod(0o755)
     (bundle / "Cargo.lock").write_text("lock\n")
     (bundle / "models.json").write_text("[]\n")
@@ -167,6 +168,9 @@ class InstallerTests(unittest.TestCase):
     def receipt(self):
         path = self.home / ".local/share/commonplace/installed-release.json"
         return json.loads(path.read_text())
+
+    def pending_path(self):
+        return self.home / ".local/share/commonplace/installed-release.pending.json"
 
     def test_first_install_idempotent_reinstall_and_verified_update(self):
         first, first_id = make_package(self.root / "first", commit_char="a")
@@ -349,8 +353,13 @@ class InstallerTests(unittest.TestCase):
         with self.assertRaises(installer.InstallerError) as raised:
             self.install(second, replace=fail_executable)
         self.assertNotIsInstance(raised.exception, installer.PartialInstallError)
+        self.assertIn(str(self.pending_path()), str(raised.exception))
+        self.assertTrue(self.pending_path().is_file())
         self.assertEqual(executable.read_bytes(), executable_before)
         self.assertEqual(receipt_path.read_bytes(), receipt_before)
+        state, _, _ = self.install(second)
+        self.assertEqual(state, "updated")
+        self.assertFalse(self.pending_path().exists())
 
     def test_first_install_receipt_failure_retries_same_archive(self):
         root = self.root / "package"
@@ -371,20 +380,26 @@ class InstallerTests(unittest.TestCase):
         executable = self.home / ".local/bin/commonplace"
         self.assertTrue(executable.is_file())
         self.assertFalse(receipt_path.exists())
-        with self.assertRaises(installer.InstallerError):
+        self.assertTrue(self.pending_path().is_file())
+        with self.assertRaises(installer.InstallerError) as raised:
             self.install(other)
+        self.assertIn(str(self.pending_path()), str(raised.exception))
 
         state, _, _ = self.install(archive)
         self.assertEqual(state, "installed")
         self.assertEqual(self.receipt()["release_id"], release_id)
+        self.assertFalse(self.pending_path().exists())
 
     def test_update_receipt_failure_retries_same_archive(self):
         first_root = self.root / "first"
         second_root = self.root / "second"
+        third_root = self.root / "third"
         first_root.mkdir()
         second_root.mkdir()
+        third_root.mkdir()
         first, _ = make_package(first_root, commit_char="a")
         second, second_id = make_package(second_root, version="0.2.0", commit_char="b")
+        third, _ = make_package(third_root, version="0.3.0", commit_char="c")
         self.install(first)
         receipt_path = self.home / ".local/share/commonplace/installed-release.json"
         old_receipt = receipt_path.read_bytes()
@@ -397,9 +412,52 @@ class InstallerTests(unittest.TestCase):
         with self.assertRaises(installer.PartialInstallError):
             self.install(second, replace=fail_receipt)
         self.assertEqual(receipt_path.read_bytes(), old_receipt)
+        self.assertTrue(self.pending_path().is_file())
+        with self.assertRaises(installer.InstallerError) as raised:
+            self.install(third)
+        self.assertIn(str(self.pending_path()), str(raised.exception))
         state, _, _ = self.install(second)
         self.assertEqual(state, "updated")
         self.assertEqual(self.receipt()["release_id"], second_id)
+        self.assertFalse(self.pending_path().exists())
+
+    def test_byte_identical_different_archive_cannot_supersede_partial_update(self):
+        first_root = self.root / "first"
+        second_root = self.root / "second"
+        third_root = self.root / "third"
+        first_root.mkdir()
+        second_root.mkdir()
+        third_root.mkdir()
+        first, _ = make_package(first_root, executable_marker="identical")
+        second, _ = make_package(
+            second_root,
+            commit_char="b",
+            executable_marker="identical",
+        )
+        third, third_id = make_package(
+            third_root,
+            commit_char="c",
+            executable_marker="identical",
+        )
+        self.install(first)
+        receipt_path = self.home / ".local/share/commonplace/installed-release.json"
+        old_receipt = receipt_path.read_bytes()
+
+        def fail_receipt(source, destination):
+            if destination == receipt_path:
+                raise OSError("injected receipt publication failure")
+            os.replace(source, destination)
+
+        with self.assertRaises(installer.PartialInstallError):
+            self.install(second, replace=fail_receipt)
+        self.assertEqual(receipt_path.read_bytes(), old_receipt)
+        with self.assertRaises(installer.InstallerError) as raised:
+            self.install(third)
+        self.assertIn(str(self.pending_path()), str(raised.exception))
+        state, _, _ = self.install(second)
+        self.assertEqual(state, "updated")
+        self.assertNotEqual(self.receipt()["release_id"], third_id)
+        self.assertFalse(self.pending_path().exists())
 
     def test_release_publication_interruption_is_pre_activation_and_retryable(self):
         root = self.root / "package"
@@ -500,11 +558,108 @@ class InstallerTests(unittest.TestCase):
         with self.assertRaises(installer.PartialInstallError):
             self.install(archive, replace=fail_receipt)
         self.assertEqual(receipt_path.read_bytes(), manual_receipt)
+        self.assertTrue(self.pending_path().is_file())
         self.assertIn(b"commonplace 0.2.0", stable.read_bytes())
         state, _, _ = self.install(archive)
         self.assertEqual(state, "updated")
         self.assertEqual(self.receipt()["release_id"], canonical_id)
         self.assertTrue(manual_release.is_dir())
+        self.assertFalse(self.pending_path().exists())
+
+    def test_exact_completed_pending_marker_is_cleared_idempotently(self):
+        root = self.root / "package"
+        root.mkdir()
+        archive, _ = make_package(root)
+        self.install(archive)
+        receipt = self.receipt()
+        pending = {
+            "format": "commonplace-installed-release-pending/1",
+            **{field: receipt[field] for field in (
+                "package_version",
+                "source_commit",
+                "release_id",
+                "release_path",
+                "executable_path",
+                "executable_sha256",
+                "archive_sha256",
+            )},
+        }
+        self.pending_path().write_text(json.dumps(pending, indent=2, sort_keys=True) + "\n")
+        state, _, _ = self.install(archive)
+        self.assertEqual(state, "unchanged")
+        self.assertFalse(self.pending_path().exists())
+
+    def test_malformed_or_mismatched_pending_marker_refuses(self):
+        root = self.root / "package"
+        root.mkdir()
+        archive, _ = make_package(root)
+        self.install(archive)
+        receipt = self.receipt()
+        pending = {
+            "format": "commonplace-installed-release-pending/1",
+            **{field: receipt[field] for field in (
+                "package_version",
+                "source_commit",
+                "release_id",
+                "release_path",
+                "executable_path",
+                "executable_sha256",
+                "archive_sha256",
+            )},
+        }
+        for case, mutation in (
+            ("unknown", lambda value: value.update({"extra": "x"})),
+            ("mismatch", lambda value: value.update({"archive_sha256": "0" * 64})),
+        ):
+            with self.subTest(case=case):
+                self.pending_path().write_text(
+                    json.dumps(pending, indent=2, sort_keys=True) + "\n"
+                )
+                value = json.loads(self.pending_path().read_text())
+                mutation(value)
+                self.pending_path().write_text(
+                    json.dumps(value, indent=2, sort_keys=True) + "\n"
+                )
+                with self.assertRaises(installer.InstallerError):
+                    self.install(archive)
+
+    def test_pending_marker_removal_failure_is_partial_and_retryable(self):
+        root = self.root / "package"
+        root.mkdir()
+        archive, _ = make_package(root)
+        real_remove = installer.remove_pending
+        calls = 0
+
+        def fail_once(path):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise installer.InstallerError("injected pending removal failure")
+            real_remove(path)
+
+        with mock.patch.object(installer, "remove_pending", fail_once):
+            with self.assertRaises(installer.PartialInstallError):
+                self.install(archive)
+        self.assertTrue(self.pending_path().is_file())
+        state, _, _ = self.install(archive)
+        self.assertEqual(state, "unchanged")
+        self.assertFalse(self.pending_path().exists())
+
+    def test_failure_before_pending_marker_leaves_no_marker(self):
+        root = self.root / "package"
+        root.mkdir()
+        archive, release_id = make_package(root)
+        real_smoke = installer.smoke_executable
+
+        def fail_release_smoke(executable, version):
+            if release_id in str(executable):
+                raise installer.InstallerError("injected release smoke failure")
+            real_smoke(executable, version)
+
+        with mock.patch.object(installer, "smoke_executable", fail_release_smoke):
+            with self.assertRaises(installer.InstallerError):
+                self.install(archive)
+        self.assertFalse(self.pending_path().exists())
 
     def test_rejects_malformed_or_mismatched_manual_install(self):
         cases = {

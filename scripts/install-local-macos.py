@@ -61,6 +61,17 @@ MANUAL_RECEIPT_FIELDS = {
     "platform",
     "architecture",
 }
+PENDING_FORMAT = "commonplace-installed-release-pending/1"
+PENDING_FIELDS = {
+    "format",
+    "package_version",
+    "source_commit",
+    "release_id",
+    "release_path",
+    "executable_path",
+    "executable_sha256",
+    "archive_sha256",
+}
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}")
 SIDECAR_RE = re.compile(r"([0-9a-f]{64})  ([^/\n]+)\n")
@@ -574,6 +585,31 @@ def installed_receipt(path: Path) -> dict[str, str]:
     raise InstallerError(f"unsupported installed release receipt format: {receipt_format!r}")
 
 
+def installed_pending(path: Path) -> dict[str, str]:
+    text, pending = read_receipt_json(path)
+    require(set(pending) == PENDING_FIELDS,
+            f"pending installed release marker has unknown or missing fields: {path}")
+    require(all(isinstance(pending[field], str) for field in PENDING_FIELDS),
+            f"pending installed release marker fields must all be strings: {path}")
+    require(pending["format"] == PENDING_FORMAT,
+            f"unsupported pending installed release marker format: {pending['format']!r}")
+    require(VERSION_RE.fullmatch(pending["package_version"]) is not None,
+            "pending installed release marker has an invalid package version")
+    require(COMMIT_RE.fullmatch(pending["source_commit"]) is not None,
+            "pending installed release marker has an invalid source commit")
+    require(SHA256_RE.fullmatch(pending["executable_sha256"]) is not None,
+            "pending installed release marker has an invalid executable hash")
+    require(SHA256_RE.fullmatch(pending["archive_sha256"]) is not None,
+            "pending installed release marker has an invalid archive hash")
+    expected_release_id = (
+        f"commonplace-{pending['package_version']}-{pending['source_commit'][:12]}-macos-arm64"
+    )
+    require(pending["release_id"] == expected_release_id,
+            "pending installed release marker has an invalid release identifier")
+    require_canonical_receipt_text(path, text, pending)
+    return pending  # type: ignore[return-value]
+
+
 def verify_manual_release(receipt: dict[str, str], releases_root: Path) -> None:
     release = releases_root / receipt["release_id"]
     require(Path(receipt["release_path"]) == release,
@@ -683,20 +719,58 @@ def publish_receipt(
             staging.unlink()
 
 
+def publish_pending(
+    pending_path: Path,
+    pending: dict[str, str],
+    replace: Callable[[Path, Path], None],
+) -> None:
+    bytes_value = (json.dumps(pending, indent=2, sort_keys=True) + "\n").encode()
+    descriptor, name = tempfile.mkstemp(prefix=".installed-release.pending.json.installing-",
+                                        dir=pending_path.parent)
+    staging = Path(name)
+    try:
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(bytes_value)
+            output.flush()
+            os.fsync(output.fileno())
+        staging.chmod(0o644)
+        replace(staging, pending_path)
+        fsync_directory(pending_path.parent)
+    except OSError as error:
+        raise InstallerError(
+            f"failed to publish pending installed release marker {pending_path}: {error}"
+        ) from error
+    finally:
+        if staging.exists():
+            staging.unlink()
+
+
+def remove_pending(pending_path: Path) -> None:
+    require_regular_file(pending_path, "pending installed release marker")
+    try:
+        pending_path.unlink()
+        fsync_directory(pending_path.parent)
+    except OSError as error:
+        raise InstallerError(
+            f"failed to clear pending installed release marker {pending_path}: {error}"
+        ) from error
+
+
 def partial_guidance(
     archive: Path,
     executable: Path,
     receipt: Path,
+    pending: Path,
     release: Path,
     error: Exception,
 ) -> PartialInstallError:
     script = Path(__file__).resolve()
     return PartialInstallError(
-        "the stable executable was activated but the installed release receipt was not verified; "
+        "the stable executable may have been activated but the installed release receipt was not verified; "
         f"installation is partial: {error}. Inspect with "
-        f"`shasum -a 256 {executable}` and `cat {receipt}` (if present), verify release "
-        f"`{release}`, then retry the same archive with "
-        f"`python3 {script} {archive}`. Do not install a different archive until this retry succeeds."
+        f"`shasum -a 256 {executable}`, `cat {receipt}` (if present), and "
+        f"`cat {pending}`; verify release `{release}`, then retry the same archive with "
+        f"`python3 {script} {archive}`."
     )
 
 
@@ -728,14 +802,10 @@ def install_archive(
         release = releases_root / release_id
         executable = bin_root / "commonplace"
         receipt_path = share_root / "installed-release.json"
+        pending_path = share_root / "installed-release.pending.json"
         ensure_directory(releases_root)
         ensure_directory(bin_root)
 
-        receipt, state = current_installed_state(
-            receipt_path,
-            executable,
-            incoming_executable_hash,
-        )
         expected_identity = {
             "format": RECEIPT_FORMAT,
             "package_version": version,
@@ -748,6 +818,39 @@ def install_archive(
             "platform": "macos",
             "architecture": "arm64",
         }
+        expected_pending = {
+            "format": PENDING_FORMAT,
+            "package_version": version,
+            "source_commit": source_commit,
+            "release_id": release_id,
+            "release_path": str(release),
+            "executable_path": str(executable),
+            "executable_sha256": incoming_executable_hash,
+            "archive_sha256": archive_hash,
+        }
+        pending = (
+            installed_pending(pending_path)
+            if lstat_or_none(pending_path) is not None
+            else None
+        )
+        if pending is not None:
+            require(
+                pending == expected_pending,
+                "another installation is pending at "
+                f"{pending_path} for release {pending['release_id']} and archive SHA-256 "
+                f"{pending['archive_sha256']}; retry that same verified archive before "
+                f"installing {release_id}",
+            )
+        receipt, state = current_installed_state(
+            receipt_path,
+            executable,
+            incoming_executable_hash,
+        )
+        if state in ("recover-first-install", "recover-update"):
+            require(
+                pending is not None,
+                f"stable executable recovery state has no verified pending marker at {pending_path}",
+            )
         if receipt is not None:
             expected_prior_release = releases_root / receipt["release_id"]
             require(Path(receipt["release_path"]) == expected_prior_release,
@@ -778,20 +881,30 @@ def install_archive(
                 fsync_directory(executable.parent)
                 fsync_directory(receipt_path.parent)
                 fsync_directory(release.parent)
+                if pending is not None:
+                    remove_pending(pending_path)
             except (InstallerError, OSError) as error:
                 raise partial_guidance(
-                    archive, executable, receipt_path, release, error
+                    archive, executable, receipt_path, pending_path, release, error
                 ) from error
             return "unchanged", executable, receipt_path
 
         smoke_executable(release / "commonplace", version)
+        if pending is None:
+            publish_pending(pending_path, expected_pending, replace)
         if state not in ("recover-first-install", "recover-update"):
-            activate_executable(
-                release / "commonplace",
-                executable,
-                incoming_executable_hash,
-                replace,
-            )
+            try:
+                activate_executable(
+                    release / "commonplace",
+                    executable,
+                    incoming_executable_hash,
+                    replace,
+                )
+            except InstallerError as error:
+                raise InstallerError(
+                    f"{error}. Pending installation is recorded at {pending_path}; "
+                    f"retry the same verified archive {archive}"
+                ) from error
 
         try:
             fsync_directory(executable.parent)
@@ -807,8 +920,11 @@ def install_archive(
             verify_release_matches(release, bundle, checksums)
             require(sha256(executable) == incoming_executable_hash,
                     "stable executable checksum changed after receipt publication")
+            remove_pending(pending_path)
         except (InstallerError, OSError) as error:
-            raise partial_guidance(archive, executable, receipt_path, release, error) from error
+            raise partial_guidance(
+                archive, executable, receipt_path, pending_path, release, error
+            ) from error
         return "installed" if receipt is None else "updated", executable, receipt_path
 
 

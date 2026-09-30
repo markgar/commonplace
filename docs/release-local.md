@@ -113,13 +113,20 @@ and receipt. Existing stores, configuration, reports, replay inputs and earlier
 releases are not changed or removed.
 
 Failures before executable activation preserve the prior executable and receipt;
-a completely verified immutable release may remain for retry. If activation
-succeeds but a later smoke, fsync or receipt step fails, the installer reports a
-partial/uncertain installation and prints exact inspection and same-archive
-retry guidance. Retry that archive before attempting another one. The installer
-recognizes only an executable that exactly matches the verified incoming
-archive as recoverable; unmanaged or otherwise mismatched state fails closed.
-There is no automatic rollback or retention cleanup.
+a completely verified immutable release may remain for retry. Immediately before
+activation, the installer atomically writes
+`~/.local/share/commonplace/installed-release.pending.json`, identifying the
+verified archive, release and executable. It removes and fsyncs that marker only
+after the canonical receipt and all final verification succeed.
+
+If activation or a later smoke, fsync, receipt or marker-removal step fails, the
+installer reports a partial/pending installation and prints the marker path plus
+exact same-archive retry guidance. While the marker exists, even a different
+archive with byte-identical executable contents is refused. An exact retry
+reuses the verified release and converges; if the final receipt already landed,
+the retry reverifies it and clears the stale exact marker. Malformed or
+mismatched marker state fails closed. There is no automatic rollback, manual
+marker cleanup path or retention cleanup.
 
 The installer also recognizes the one strict
 `commonplace-manual-install/1` receipt created for the existing current-main

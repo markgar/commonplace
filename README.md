@@ -681,6 +681,9 @@ local release guide for receipt inspection and partial-install retry rules.
 It also narrowly adopts the existing strict `commonplace-manual-install/1`
 current-main installation on its first verified archive update; other legacy or
 mismatched manual state is rejected.
+Interrupted activation is pinned to its exact archive by
+`~/.local/share/commonplace/installed-release.pending.json`; retry that archive
+to complete receipt publication and clear the marker.
 
 ```sh
 cargo fmt --all -- --check
