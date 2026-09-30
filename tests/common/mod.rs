@@ -114,6 +114,10 @@ impl Store {
         self.success(&args)
     }
 
+    pub fn freeze(&self) -> Value {
+        self.success(&["schema", "freeze", "--json"])
+    }
+
     pub fn failure(&self, arguments: &[&str], code: &str, exit: i32) -> Value {
         let output = self.run(arguments);
         assert_eq!(output.status.code(), Some(exit), "{output:?}");

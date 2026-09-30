@@ -102,6 +102,8 @@ enum SchemaCommand {
     },
     /// Read your complete vocabulary, not the RDF mapping (see graph schema).
     Show,
+    /// Permanently freeze this store's current vocabulary.
+    Freeze,
 }
 
 pub fn main() -> ExitCode {
@@ -112,7 +114,10 @@ pub fn main() -> ExitCode {
         Ok(response)
             if matches!(
                 &response.result,
-                CommandResult::Record(_) | CommandResult::Remove(_) | CommandResult::Withdraw(_)
+                CommandResult::Record(_)
+                    | CommandResult::Remove(_)
+                    | CommandResult::Withdraw(_)
+                    | CommandResult::Freeze(_)
             ) =>
         {
             match write_committed_response(&response, &mut std::io::stdout().lock()) {
@@ -156,9 +161,10 @@ fn write_committed_response(response: &CommandResponse, output: &mut impl Write)
         CommandResult::Withdraw(withdrawn) => {
             (&withdrawn.receipt, crate::app::withdraw::RECOVERY_GUIDANCE)
         }
+        CommandResult::Freeze(frozen) => (&frozen.receipt, crate::app::schema::RECOVERY_GUIDANCE),
         _ => {
             return Err(crate::CommonplaceError::Storage(
-                "expected committed record, remove, or withdraw response".into(),
+                "expected committed record, remove, withdraw, or schema freeze response".into(),
             ));
         }
     };
@@ -253,6 +259,21 @@ fn execute(cli: Cli) -> Result<CommandResponse> {
             CommandResult::Vocabulary(schema::show(&cli.store)?),
         )),
         Command::Schema {
+            command: SchemaCommand::Freeze,
+        } => {
+            let result = schema::freeze(&cli.store, &schema::OperationConfig::default())?;
+            let status = if result.created {
+                "complete"
+            } else {
+                "unchanged"
+            };
+            Ok(CommandResponse::new(
+                "schema.freeze",
+                status,
+                CommandResult::Freeze(result),
+            ))
+        }
+        Command::Schema {
             command:
                 SchemaCommand::Apply {
                     file,
@@ -316,6 +337,9 @@ impl Command {
                 command: SchemaCommand::Show,
             } => "schema.show",
             Self::Schema {
+                command: SchemaCommand::Freeze,
+            } => "schema.freeze",
+            Self::Schema {
                 command: SchemaCommand::Apply { describe: true, .. },
             } => "schema.apply.describe",
             Self::Schema { .. } => "schema.apply",
@@ -331,7 +355,7 @@ mod tests {
     use super::execute;
 
     #[test]
-    fn record_output_write_and_flush_failures_report_committed_ids() {
+    fn committed_output_write_and_flush_failures_report_recovery_guidance() {
         struct FailingOutput(bool);
         impl std::io::Write for FailingOutput {
             fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
@@ -367,6 +391,27 @@ mod tests {
             );
             assert!(error.to_string().contains("Do not retry record"));
             assert!(!error.to_string().contains("cleanup"));
+        }
+        let response = super::CommandResponse::new(
+            "schema.freeze",
+            "complete",
+            super::CommandResult::Freeze(crate::app::schema::FreezeResult {
+                schema_version: 3,
+                frozen: true,
+                created: true,
+                receipt: "schema freeze is durable at schema_version 3".into(),
+            }),
+        );
+        for flush in [false, true] {
+            let error =
+                super::write_committed_response(&response, &mut FailingOutput(flush)).unwrap_err();
+            assert_eq!(error.code(), "internal_error");
+            assert!(
+                error
+                    .to_string()
+                    .contains("schema freeze is durable at schema_version 3")
+            );
+            assert!(error.to_string().contains("Rerun schema freeze"));
         }
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("store");
@@ -450,6 +495,10 @@ mod tests {
             (
                 vec!["commonplace", "schema", "--help"],
                 "not the RDF mapping",
+            ),
+            (
+                vec!["commonplace", "schema", "freeze", "--help"],
+                "Permanently freeze this store's current vocabulary",
             ),
             (
                 vec!["commonplace", "graph", "schema", "--help"],

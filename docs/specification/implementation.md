@@ -112,6 +112,7 @@ validation runs, not the supported release targets or required release evidence.
 | --- | --- | --- | --- |
 | [P0 (#11)](https://github.com/markgar/commonplace/issues/11) | Agree the first execution boundaries and unresolved decisions | Baseline inspection | Integrator |
 | [P1 (#12)](https://github.com/markgar/commonplace/issues/12) | Apply and inspect vocabulary in a safely opened store | P0 | Shared start, then knowledge lane |
+| [P1f (#47)](https://github.com/markgar/commonplace/issues/47) | Permanently freeze one initialized store's current vocabulary | Integrated P1 schema path | Knowledge lane follow-on |
 | [P2 (#13)](https://github.com/markgar/commonplace/issues/13) | Prove the selected inference and graph components work together | P0 | Bounded runtime work |
 | [P3 (#15)](https://github.com/markgar/commonplace/issues/15) | Ingest files and read exact, revisioned evidence | P1, P2 inference gate | Source lane |
 | [P4 (#19)](https://github.com/markgar/commonplace/issues/19) | Search current evidence through the complete hybrid pipeline | P3 | Source lane |
@@ -135,6 +136,10 @@ Recommended schedule:
    Coordinate edits to the graph publication boundary rather than assigning two
    owners to it.
 5. Finish P10 against the integrated release candidate.
+
+P1f is a bounded follow-on to the integrated P1 schema path. It may proceed
+without reopening the original lane schedule and does not block unrelated
+source, knowledge, graph, or release work.
 
 P9 may precede P4 if streamed input is more urgent; neither depends on the other.
 P5a does not need ingestion; P5b needs evidence IDs but not search or streaming
@@ -205,6 +210,40 @@ requests leave SQLite unchanged. `--check` and description commands do not
 mutate state or load inference. Real SQLite tests cover constraints and
 operation timestamps; process tests cover writer contention and release on
 termination. Keep initialization behavior covered.
+
+### 3.4a P1f: permanent schema freeze
+
+**Outcome:** permanently freeze one initialized store's current vocabulary
+through `commonplace --store <path> schema freeze --json`.
+
+**Work:** add the optional versioned store-root marker and named pending scratch
+defined by persistence section 7.1. Create it under P1's bounded writer lock
+using file synchronization, atomic rename, and store-directory synchronization.
+Freeze is safe to repeat and changes neither SQLite version nor Oxigraph.
+Non-check schema application preserves `unchanged` only for a no-op under a
+valid matching final marker; effective changes fail with `conflict`. Invalid or
+pending marker state fails every non-check application. Schema show and check
+mode remain available.
+
+**Primary surfaces:** the four owning specifications, `app/schema`, one focused
+store-local marker module, shared CLI output/routing, existing schema executable
+fixtures, and the root README.
+
+**Acceptance:** through the executable, initialize, apply vocabulary, freeze,
+reopen, and prove one request containing entity-type, identifier-scheme,
+predicate, and endpoint additions fails without changing vocabulary,
+`schema_version`, `knowledge_version`, or graph files. Prove exact marker bytes,
+first/repeated/uncertain freeze semantics, valid and invalid final states,
+pending replacement and fail-closed behavior, version-zero freeze, unchanged
+no-op apply, available show/check reads, bounded writer contention, and safe
+response-delivery retry guidance. Existing unfrozen schema tests continue to
+pass.
+
+**Exclusions:** no unfreeze, bypass, removal/retirement, migration, replacement,
+format bump, second backend, graph-authoring policy, background work, or
+Oxigraph behavior. A different vocabulary requires a fresh store. The marker is
+an accidental-change guardrail, not a security boundary against direct store
+editing.
 
 ### 3.5 P2: integrated runtime preflight
 
@@ -733,6 +772,11 @@ A release candidate must pass this sequence from an empty store:
 
 - Schema application is additive and atomic.
 - An endpoint-only schema change increments `schema_version` once.
+- A frozen schema rejects every effective non-check vocabulary change without
+  changing either version or graph state; no-op apply, show, and check retain
+  their specified behavior.
+- Freeze-marker creation/retry is atomic and durable according to persistence
+  section 7.1; malformed, inconsistent, and pending states fail closed.
 - Entities may hold multiple active types.
 - Identifier uniqueness and ambiguous name resolution are enforced.
 - Evidence quote and offset mismatches reject the whole authoring request.

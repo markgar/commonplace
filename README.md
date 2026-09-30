@@ -7,6 +7,7 @@ hybrid SQLite search, explicitly authored cited knowledge, and local graph
 queries.
 
 The Rust implementation supports store initialization, additive vocabulary,
+permanent store-local vocabulary freezing,
 file and generic stdin/JSONL ingestion, hybrid search, atomic cited entity/type/fact
 authoring and withdrawal, explicit source removal, authoritative reads, and
 read-only RDF graph queries and rebuild:
@@ -41,6 +42,7 @@ Create `schema.json` with the vocabulary you want to add:
 cargo run --bin commonplace -- --store .commonplace schema apply schema.json --check --json
 cargo run --bin commonplace -- --store .commonplace schema apply schema.json --json
 cargo run --bin commonplace -- --store .commonplace schema show --json
+cargo run --bin commonplace -- --store .commonplace schema freeze --json
 cargo run --bin commonplace -- schema apply --describe --json
 ```
 
@@ -77,6 +79,30 @@ files return `limit_exceeded`. Generated descriptions contain Draft 2020-12 JSON
 Schema and a valid example. The generated schema is also used to validate
 execution input, without remote schema resolution. Stateful additive checks run
 identically for `--check` and apply.
+
+`schema freeze` permanently freezes the initialized store's current vocabulary.
+Its first success returns status `complete`; repeats return `unchanged`. Both
+return `{"schema_version":N,"frozen":true}` without changing
+`schema_version`, `knowledge_version`, or any graph file. The durable marker is
+the inspectable store-root file `schema-freeze.json`:
+
+```json
+{"format":"commonplace-schema-freeze/1","schema_version":1}
+```
+
+The actual file uses compact UTF-8 JSON followed by LF. A valid frozen store
+rejects every effective non-check `schema apply` with `conflict`; a no-op remains
+`unchanged`, and `schema show` plus `schema apply --check` remain available.
+Malformed, inconsistent, or interrupted marker state fails all non-check schema
+applications closed. Rerun `schema freeze` to replace its named pending scratch
+or confirm an uncertain successful delivery. A different vocabulary requires a
+fresh store: Commonplace has no unfreeze, bypass, schema removal, replacement,
+or migration command.
+
+Freeze is an accidental-change guardrail, not an authorization boundary against
+arbitrary filesystem or database edits. Future operating automation must treat
+the final marker as permanent and must not remove or modify it. Freezing the
+vocabulary does not limit entity or fact authoring under that vocabulary.
 
 Stores are validated before writing, without migration or automatic repair.
 Concurrent SQLite-backed reads use consistent read-only snapshots. A read may
