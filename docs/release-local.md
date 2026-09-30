@@ -96,10 +96,35 @@ commonplace --store "$store" ingest /absolute/path/to/notes
 commonplace --store "$store" search "release planning"
 ```
 
+Alternatively, deliberately create the optional macOS user configuration once:
+
+```sh
+config="$HOME/Library/Application Support/commonplace/config.json"
+store="$HOME/.local/share/commonplace/stores/personal"
+mkdir -p "$(dirname "$config")"
+tmp="$config.tmp"
+cat > "$tmp" <<EOF
+{
+  "format": "commonplace-user-config/1",
+  "store": "$store",
+  "model_cache": "$release_dir/pinned-models"
+}
+EOF
+mv "$tmp" "$config"
+commonplace config show
+commonplace init
+```
+
+This file is user-owned and distinct from the selected store's backend-managed
+`config.json`. The package helper and installation commands do not create or
+replace it. There is no `--config`, profile, credential, migration, or config
+writer. Use explicit `--store`/`--model-cache` or
+`COMMONPLACE_STORE`/`COMMONPLACE_MODEL_CACHE` overrides for another invocation.
+
 For a later process, use the exact installed absolute model path rather than
 assuming that its shell still has `release_dir`. Agents may instead invoke the
 absolute executable and set `COMMONPLACE_MODEL_CACHE` explicitly in their
-process environment; no shell profile or new configuration file is required.
+process environment; no shell profile is required.
 The user store is a separate persistent directory, never part of a release
 archive or replacement operation. Keep the archive/checksum and do not silently
 overwrite an existing installation or mutate/migrate an incompatible store.

@@ -881,15 +881,16 @@ fn public_binary_file_commands_and_descriptions_need_no_model_for_empty_sources(
     invalid["max_passages"] = json!(0);
     assert!(!validator.is_valid(&invalid));
     store.assert_files(&before);
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_commonplace"))
-        .args([
-            "--store",
-            "/nonexistent/commonplace",
-            "ingest",
-            "--describe",
-        ])
-        .output()
-        .unwrap();
+    let output =
+        common::isolated_command(env!("CARGO_BIN_EXE_commonplace"), store.directory.path())
+            .args([
+                "--store",
+                "/nonexistent/commonplace",
+                "ingest",
+                "--describe",
+            ])
+            .output()
+            .unwrap();
     assert!(output.status.success());
 }
 
