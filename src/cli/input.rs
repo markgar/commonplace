@@ -43,6 +43,36 @@ pub fn read(path: &Path, maximum_bytes: usize) -> Result<SchemaInput> {
     parse(file, maximum_bytes)
 }
 
+pub fn describe_scope() -> Result<Description> {
+    let input_schema = generated_schema::<crate::domain::search::DocumentScope>();
+    let example = serde_json::json!({"document_ids":["doc:1"],"truncated":false});
+    validate(&example, &input_schema)?;
+    Ok(Description {
+        input_schema,
+        example,
+    })
+}
+
+pub fn read_scope(path: &Path) -> Result<crate::domain::search::DocumentScope> {
+    let bytes = if path == Path::new("-") {
+        read_bounded(
+            std::io::stdin().lock(),
+            crate::domain::search::MAX_SCOPE_BYTES,
+            "scope",
+        )?
+    } else {
+        read_bounded(
+            std::fs::File::open(path)?,
+            crate::domain::search::MAX_SCOPE_BYTES,
+            "scope",
+        )?
+    };
+    let scope: crate::domain::search::DocumentScope = serde_json::from_slice(&bytes)
+        .map_err(|error| CommonplaceError::InvalidInput(format!("invalid scope JSON: {error}")))?;
+    scope.validate()?;
+    Ok(scope)
+}
+
 fn parse(reader: impl Read, maximum_bytes: usize) -> Result<SchemaInput> {
     let bytes = read_bounded(reader, maximum_bytes, "schema")?;
     let value: Value = serde_json::from_slice(&bytes)

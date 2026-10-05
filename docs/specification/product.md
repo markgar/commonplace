@@ -300,10 +300,11 @@ Every result includes:
 - score or rank information; and
 - explicit truncation information.
 
-Supported filters are optional `--since`, repeatable `--source-type`, and optional
-single `--must-contain '<phrase>'`. All
+Supported filters are optional `--since`/`--until`, `--scope FILE` (or `-` for
+stdin), repeatable `--source-type`, and optional single `--must-contain '<phrase>'`. All
 apply identically to lexical and vector candidate selection. Structured entity
-or graph-expansion filters are not part of hybrid search.
+or automatic graph-expansion filters are not part of hybrid search. Scope is an
+explicit schema-neutral document allow-list, not entity interpretation.
 
 `--must-contain` requires a literal contiguous substring of the **passage text**,
 not the full source, title, or metadata. Both paths apply it in SQLite before
@@ -331,9 +332,12 @@ exact alternatives, bounded to 32 supplied values and 4096 aggregate UTF-8 bytes
 empty/NUL values are rejected. `--since` is an inclusive RFC3339 instant normalized
 to UTC without discarding fractional seconds. It admits current dated revisions
 at/after that instant **plus timeless context**, and excludes older dated and
-unknown sources. Both native candidate paths apply this predicate before their
+unknown sources. `--until` supplies an inclusive upper bound with the same
+normalization and precision. Either bound includes timeless and excludes unknown;
+equal bounds admit the exact instant, reversed windows fail `invalid_input`.
+Both native candidate paths apply this predicate before their
 limits; ingestion/creation time never substitutes for event time. Without
-`--since`, all three states remain eligible.
+either date bound, all three states remain eligible.
 
 `--limit` defaults to 10 and accepts 0 through 50. Search returns the common
 envelope with operation `search`, status `complete`, and result
@@ -342,16 +346,62 @@ Each item has 1-based `rank` plus the same complete evidence fields as passage
 `get`. Empty eligible results return `items: []`. Zero limit retains no items,
 but still checks required models and indexes.
 
-`temporal_filter` is null without `--since`. With it, the object contains normalized
-`since`, `includes_timeless: true`, `coverage`, and `diagnostics`. Coverage counts
-current sources after source-type filters, including empty text, not historical
+`temporal_filter` is null without either date bound. With bounds, the object contains
+normalized nullable `since` and `until`, `includes_timeless: true`, `coverage`, and
+`diagnostics`. Coverage counts current sources after scope and source-type filters,
+including empty text, not historical
 revisions, query matches, passages, candidates, or retained results:
-`eligible_dated`, `timeless`, `older_dated`, and `excluded_unknown`. Counts use the
+`eligible_dated`, `timeless`, `older_dated`, `newer_dated`, and `excluded_unknown`. Counts use the
 same SQLite read snapshot as search. Diagnostics contains `unknown_dates_excluded`
 with an explicit coverage warning whenever excluded_unknown is nonzero, even
 with nonempty results, empty results, or zero limit; otherwise it is empty.
 Timeless inclusion is a filter semantic, not a claim that timeless sources match.
 Coverage does not establish exhaustive relevance or certainty that no evidence exists.
+
+#### Explicit document scope and grouped evidence
+
+`graph query QUERY --document-scope COLUMN` takes a SELECT variable name without
+`?` and returns `{document_ids, truncated}` inside the common envelope instead
+of RDF rows. Every retained binding must be a canonical `urn:commonplace:doc:N`
+IRI. Missing columns, unbound/non-document terms and noncanonical spellings fail
+`invalid_input`; native graph evaluation/version/limit failures remain unchanged.
+No query recipes or vocabulary-specific behavior are built into the bridge.
+
+`search --scope FILE` reads precisely that result object (pipe `jq '.result'`
+from graph output); `--scope -` reads stdin. `search --describe-scope` returns
+the generated input schema and example without store/model access. Scope JSON
+rejects unknown/duplicate fields, requires `document_ids` and boolean `truncated`,
+and is bounded to 64 KiB and 1024 supplied IDs including duplicates. IDs use exact
+canonical positive tagged spelling; malformed/overflow IDs fail `invalid_input`,
+bounds fail `limit_exceeded`. Duplicate IDs are counted and deterministically
+deduplicated. Well-formed missing/removed IDs are excluded and listed in diagnostics,
+not substituted. Absent scope means all documents; explicit empty means none.
+Scope intersects all existing filters before both candidate limits. Required
+indexes/models are still validated even with empty scope, no results or zero limit.
+
+Scoped results additionally contain `scope` with `supplied_ids`, `duplicate_ids`,
+`selected_sources` (unique supplied IDs, including missing), `missing_document_ids`,
+`existing_sources`, `excluded_source_type`, `eligible_sources`, `eligible_passages`,
+`selection_truncated`, `lexical_truncated`, `vector_truncated`, `fusion_truncated`,
+`result_truncated`, and diagnostics. Eligible sources count current sources after
+scope/type/date; eligible passages additionally apply phrase. Retrieval-stage flags
+refer to collection cutoffs, not selection completeness or text length.
+Diagnostics always warn `selected_scope_only`; conditionally report
+`selection_truncated`, `missing_documents`, `empty_scope`, `no_eligible_passages`
+or `no_candidates_in_scope`. Zero retained-result limit does not imply no matches.
+A partial graph scope is permitted but explicitly warned; scope never establishes
+corpus-wide absence or exhaustive relevance.
+
+`--grouped` returns `{groups,truncated,temporal_filter}` plus scope when supplied,
+instead of passage items. Limit remains retained passage count (0..50). Groups
+follow first retained rank; group passages preserve global ranks. Each group
+shares canonical document/revision IDs, source key/title/type/state/time. Each
+passage carries canonical passage ID, rank, original half-open byte span and full
+exact text (already bounded to 1024 UTF-8 bytes). Compactness comes from shared
+source fields and omitted metadata, not shortening relevant text. No source text
+is reconstructed or stitched. Full metadata and historical revisions remain
+accessible via get.
+Grouping changes no ranking, collection truncation or coverage semantics.
 
 `truncated` reports collection omissions: a candidate sentinel proves more
 candidates, fusion exceeds the rerank bound, or final results exceed `--limit`.
@@ -438,6 +488,23 @@ delete entities. Entity and metadata creation may carry an informational
 `created_by` label, which has no authorization or lifecycle semantics. Metadata
 correction is not retained as knowledge history and does not rebuild the graph
 because aliases and identifiers are not projected.
+
+Read-only `entity list` returns complete existing entity metadata together
+(canonical ID/name, aliases, identifiers, active type/membership/fact IDs).
+Optional `--type` filters an existing schema type by active membership;
+`--missing-identifier` filters an existing identifier scheme. Unknown terms fail
+`invalid_input`; untyped entities remain listed without type filtering.
+Ascending canonical ID order and exclusive `--after entity:N` keyset paging are
+deterministic. `--limit` defaults to 100, accepts 0..1000, and uses one sentinel
+to report `{items,truncated,next_after}`. Cursor is last retained ID only when
+truncated; zero has no cursor. Each item equals entity get metadata without `kind`.
+
+`entity resolve` takes exactly one of `--name`, `--scheme` plus `--value`, or
+`--id`, using the existing record selector validation/resolution. Exact opaque
+case-sensitive names/aliases/identifier values are not normalized. Ambiguity
+fails `conflict`; absent matches fail `not_found`. Result equals entity get
+metadata without `kind`. Both commands are authoritative SQLite read-only
+operations: no inference, graph access, metadata replay, or writes.
 
 ### 7.2 Knowledge items
 
@@ -787,6 +854,8 @@ commonplace schema freeze
 commonplace record
 commonplace withdraw
 commonplace get
+commonplace entity list
+commonplace entity resolve
 commonplace graph schema
 commonplace graph query
 commonplace graph rebuild
@@ -828,14 +897,14 @@ store/model preparation. A selected missing store is created only by explicit
 strictly offline and never falls back or downloads when files are missing or
 corrupt.
 
-`commonplace get ID` is the only direct authoritative read command. It accepts tagged
+`commonplace get ID` is the complete direct record read command. It accepts tagged
 document, revision, passage, entity, and knowledge-item IDs. Document results
 include revision IDs; revision results include complete stored text and metadata;
 passage results include their exact citation; entity results include active type
 and fact IDs; and knowledge-item results include their subtype, evidence, and
 withdrawal state. Withdrawn knowledge remains readable by ID. There is no
 generic history mode, centered-context read, semantic revision comparison, or
-separate noun-specific read command.
+separate history read command. Entity discovery/resolution are defined in section 7.1.
 
 `commonplace get` returns the complete requested record, including all referenced IDs,
 and does not silently truncate authoritative state. Existing source-size and

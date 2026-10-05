@@ -18,18 +18,19 @@ pub fn search(
     let session = SqliteDatabase::read(root)?;
     let connection = session.connection();
     search::validate_representation(connection)?;
-    let temporal_filter = filters.since.as_ref().map(|since| {
+    let temporal_filter = (filters.since.is_some() || filters.until.is_some()).then(|| {
         let coverage = search::temporal_coverage(connection, &filters)?;
         let diagnostics = if coverage.excluded_unknown == 0 {
             Vec::new()
         } else {
             vec![TemporalDiagnostic {
                 code: "unknown_dates_excluded",
-                message: "Sources with unknown event dates are excluded by --since; results do not cover those sources.",
+                message: "Sources with unknown event dates are excluded by the date window; results do not cover those sources.",
             }]
         };
         Ok::<_, CommonplaceError>(TemporalFilter {
-            since: since.clone(),
+            since: filters.since.clone(),
+            until: filters.until.clone(),
             includes_timeless: true,
             coverage,
             diagnostics,
@@ -45,6 +46,49 @@ pub fn search(
     let lexical = search::lexical(connection, &request.lexical_query(), &filters)?;
     let vector = search::vector(connection, &vectors[0], &filters)?;
     let mut candidates = fuse(&lexical.ids, &vector.ids);
+    let scope = request.scope.as_ref().map(|selection| {
+        let mut coverage = search::scope_coverage(connection, &filters)?;
+        coverage.supplied_ids = selection.document_ids.len();
+        coverage.duplicate_ids = coverage.supplied_ids - coverage.selected_sources;
+        coverage.selection_truncated = selection.truncated;
+        coverage.lexical_truncated = lexical.truncated;
+        coverage.vector_truncated = vector.truncated;
+        coverage.fusion_truncated = candidates.len() > RERANK_LIMIT;
+        coverage.result_truncated = candidates.len().min(RERANK_LIMIT) > request.limit;
+        coverage.diagnostics.push(TemporalDiagnostic {
+            code: "selected_scope_only",
+            message: "Results cover only the selected documents, not all corpus evidence; retrieval is bounded, not exhaustive.",
+        });
+        if selection.truncated {
+            coverage.diagnostics.push(TemporalDiagnostic {
+                code: "selection_truncated",
+                message: "The graph selection was truncated; omitted documents were not searched.",
+            });
+        }
+        if !coverage.missing_document_ids.is_empty() {
+            coverage.diagnostics.push(TemporalDiagnostic {
+                code: "missing_documents",
+                message: "Selected document IDs are missing or removed; they were excluded, not replaced.",
+            });
+        }
+        if coverage.selected_sources == 0 {
+            coverage.diagnostics.push(TemporalDiagnostic {
+                code: "empty_scope",
+                message: "The explicit document selection is empty; no corpus-wide search was performed.",
+            });
+        } else if coverage.eligible_passages == 0 {
+            coverage.diagnostics.push(TemporalDiagnostic {
+                code: "no_eligible_passages",
+                message: "No current passages in this scope satisfy the filters; this is not corpus-wide absence.",
+            });
+        } else if candidates.is_empty() {
+            coverage.diagnostics.push(TemporalDiagnostic {
+                code: "no_candidates_in_scope",
+                message: "No candidates were found in this scope; this is not corpus-wide absence.",
+            });
+        }
+        Ok::<_, CommonplaceError>(coverage)
+    }).transpose()?;
     let truncated = lexical.truncated
         || vector.truncated
         || candidates.len() > RERANK_LIMIT
@@ -81,5 +125,6 @@ pub fn search(
         items,
         truncated,
         temporal_filter,
+        scope,
     })
 }

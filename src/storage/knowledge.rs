@@ -207,6 +207,52 @@ fn scheme_id(db: &Connection, scheme: &str) -> Result<i64> {
     .ok_or_else(|| CommonplaceError::InvalidInput(format!("unknown identifier scheme {scheme:?}")))
 }
 
+pub fn list_entities(
+    db: &Connection,
+    entity_type: Option<&str>,
+    missing_identifier: Option<&str>,
+    after: Option<EntityId>,
+    limit: usize,
+) -> Result<Vec<EntityId>> {
+    let type_id = entity_type
+        .map(|name| entity_type_id(db, name))
+        .transpose()?;
+    let scheme = missing_identifier
+        .map(|name| scheme_id(db, name))
+        .transpose()?;
+    let mut statement = db
+        .prepare(
+            "SELECT e.entity_id FROM entities e WHERE e.entity_id > ?1
+         AND (?2 IS NULL OR EXISTS (
+             SELECT 1 FROM entity_type_memberships m JOIN knowledge_items k USING(knowledge_item_id)
+             WHERE m.entity_id=e.entity_id AND m.entity_type_id=?2 AND k.withdrawn_at IS NULL))
+         AND (?3 IS NULL OR NOT EXISTS (
+             SELECT 1 FROM entity_identifiers i
+             WHERE i.entity_id=e.entity_id AND i.identifier_scheme_id=?3))
+         ORDER BY e.entity_id LIMIT ?4",
+        )
+        .map_err(storage_error)?;
+    statement
+        .query_map(
+            params![after.map_or(0, EntityId::value), type_id, scheme, limit],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(storage_error)?
+        .map(|row| EntityId::new(row.map_err(storage_error)?))
+        .collect()
+}
+
+fn entity_type_id(db: &Connection, name: &str) -> Result<i64> {
+    db.query_row(
+        "SELECT entity_type_id FROM entity_types WHERE name=?1",
+        [name],
+        |row| row.get::<_, i64>(0),
+    )
+    .optional()
+    .map_err(storage_error)?
+    .ok_or_else(|| CommonplaceError::InvalidInput(format!("unknown entity type {name:?}")))
+}
+
 pub fn membership(
     db: &Connection,
     entity: EntityId,
@@ -216,17 +262,7 @@ pub fn membership(
     created_by: Option<&str>,
     schema_version: i64,
 ) -> Result<Knowledge> {
-    let type_id = db
-        .query_row(
-            "SELECT entity_type_id FROM entity_types WHERE name=?1",
-            [entity_type],
-            |row| row.get::<_, i64>(0),
-        )
-        .optional()
-        .map_err(storage_error)?
-        .ok_or_else(|| {
-            CommonplaceError::InvalidInput(format!("unknown entity type {entity_type:?}"))
-        })?;
+    let type_id = entity_type_id(db, entity_type)?;
     let hydrated = hydrate_support(db, support)?;
     db.execute(
         "INSERT INTO knowledge_items(kind,schema_version,created_at,created_by)

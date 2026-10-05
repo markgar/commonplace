@@ -250,6 +250,16 @@ canonical `passages.text`, with Rust Unicode whole-string lowercase substring
 semantics as specified in product section 5, not SQLite's ASCII-only `lower` or
 the contentless FTS text column. No durable table or index changes are required.
 
+Explicit document scope is an operation-local optional JSON array of numeric
+document IDs in the shared SQL predicate, intersected before lexical/vector limits.
+Null means absent; empty array matches nothing. The inclusive upper event bound
+uses the same canonical UTC text comparison and timeless/unknown semantics as
+since. Current-source temporal aggregation applies scope/type first and counts
+eligible/timeless/older/newer/unknown buckets independently of phrase and query.
+Scope inspection reports missing selected IDs and counts filtered current sources
+and eligible passages in the same snapshot. These read/output additions require
+no durable change: store/config /3 remains the one supported format.
+
 ## 7. User vocabulary
 
 ```sql
@@ -384,6 +394,11 @@ Metadata corrections may delete aliases and identifiers through
 The request must identify the owning entity by canonical ID. Deletion is
 transactional, does not delete the entity, and is not retained as knowledge
 history.
+
+Read-only entity discovery uses these authoritative metadata tables and active
+knowledge memberships, not RDF. Canonical-ID keyset pagination and existing exact
+name/alias/scheme/value resolution require no metadata rewrite, normalization,
+schema term creation, new index or projection extension.
 
 ## 9. Authored knowledge
 
