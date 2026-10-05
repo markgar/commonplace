@@ -30,7 +30,7 @@ pub(crate) struct StoreConfig {
 impl StoreConfig {
     pub(crate) fn expected() -> Self {
         Self {
-            format: "commonplace-config/2".into(),
+            format: "commonplace-config/3".into(),
             database: "commonplace.sqlite3".into(),
             graph: "graph/current".into(),
         }
@@ -56,7 +56,7 @@ impl StoreConfig {
             || config.graph != expected.graph
         {
             return Err(CommonplaceError::Conflict(format!(
-                "unsupported configuration in {}",
+                "unsupported configuration in {}; expected commonplace-config/3; use a fresh directory and explicitly reingest sources; existing data is not modified",
                 path.display()
             )));
         }

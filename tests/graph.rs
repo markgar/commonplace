@@ -44,12 +44,12 @@ fn fixture(store: &Store) {
                                       (11,'file:///nullable.txt','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z'),
                                       (12,'file:///uncited.txt','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z');
          INSERT INTO document_revisions VALUES
-             (1001,10,2,printf('%064d',2),'latest text','latest title','file',NULL,'{}','2026-01-02T00:00:00Z'),
-             (1002,11,1,printf('%064d',3),'second',NULL,'file',NULL,'{}','2026-01-01T00:00:00Z'),
-             (1003,12,1,printf('%064d',4),'uncited',NULL,'file',NULL,'{}','2026-01-01T00:00:00Z');"
+             (1001,10,2,printf('%064d',2),'latest text','latest title','file','unknown',NULL,'{}','2026-01-02T00:00:00Z'),
+             (1002,11,1,printf('%064d',3),'second',NULL,'file','timeless',NULL,'{}','2026-01-01T00:00:00Z'),
+             (1003,12,1,printf('%064d',4),'uncited',NULL,'file','unknown',NULL,'{}','2026-01-01T00:00:00Z');"
     ).unwrap();
     let text = format!("prefix:{QUOTE}:suffix");
-    db.execute("INSERT INTO document_revisions VALUES (1000,10,1,?1,?2,'old title','file','2026-01-01T00:00:00Z',?3,'2026-01-01T00:00:00Z')",
+    db.execute("INSERT INTO document_revisions VALUES (1000,10,1,?1,?2,'old title','file','dated','2026-01-01T00:00:00Z',?3,'2026-01-01T00:00:00Z')",
         rusqlite::params!["a".repeat(64),text,r#"{"nested":{"a":1},"z":"old"}"#]).unwrap();
     db.execute(
         "INSERT INTO passages VALUES (2000,1000,0,7,?1,?2)",
@@ -73,7 +73,7 @@ fn init_schema_query_rebuild_reopen_and_unused_vocabulary() {
     assert_eq!(
         serde_json::from_slice::<Value>(&fs::read(store.root.join("config.json")).unwrap())
             .unwrap(),
-        json!({"format":"commonplace-config/2","database":"commonplace.sqlite3","graph":"graph/current"})
+        json!({"format":"commonplace-config/3","database":"commonplace.sqlite3","graph":"graph/current"})
     );
     assert_eq!(
         query(&store, "SELECT ?knowledge WHERE {?knowledge ?p ?o}"),
@@ -183,6 +183,16 @@ fn membership_identity_evidence_bytes_and_complete_mapping_survive_rebuild() {
         "revision:1000",
         "source_type",
         literal("file", "string")
+    ));
+    assert!(has(
+        "revision:1000",
+        "temporal_state",
+        literal("dated", "string")
+    ));
+    assert!(has(
+        "revision:1002",
+        "temporal_state",
+        literal("timeless", "string")
     ));
     assert!(has(
         "revision:1000",
@@ -453,7 +463,7 @@ fn old_unknown_and_relabeled_layouts_are_never_mutated() {
             "v1-marker" => store.database().execute_batch("PRAGMA ignore_check_constraints=ON; UPDATE store_state SET format='commonplace-store/1'").unwrap(),
             "old-file" => fs::write(store.root.join("graph/current.grafeo"),b"historical").unwrap(),
             "unknown-config" => fs::write(store.root.join("config.json"),br#"{"format":"future","database":"commonplace.sqlite3","graph":"graph/current"}"#).unwrap(),
-            "relabeled-ddl" => store.database().execute_batch("PRAGMA writable_schema=ON; UPDATE sqlite_schema SET sql=replace(sql,'commonplace-store/2','commonplace-store/1') WHERE name='store_state'; PRAGMA writable_schema=OFF").unwrap(),
+            "relabeled-ddl" => store.database().execute_batch("PRAGMA writable_schema=ON; UPDATE sqlite_schema SET sql=replace(sql,'commonplace-store/3','commonplace-store/1') WHERE name='store_state'; PRAGMA writable_schema=OFF").unwrap(),
             _ => unreachable!(),
         }
         let before = store.files();
@@ -826,7 +836,7 @@ fn snapshot_crosses_page_and_batch_boundaries_without_losing_items() {
                 INSERT INTO knowledge_items SELECT n,'type_membership',1,'2026-01-01T00:00:00Z',NULL,NULL,NULL FROM ids;
                 INSERT INTO entity_type_memberships SELECT knowledge_item_id,1,1 FROM knowledge_items;
                 INSERT INTO documents VALUES (1,'file:///batch.txt','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z');
-                INSERT INTO document_revisions VALUES (1,1,1,printf('%064d',0),replace(printf('%01026d',0),'0','a'),NULL,'file',NULL,'{}','2026-01-01T00:00:00Z');
+                INSERT INTO document_revisions VALUES (1,1,1,printf('%064d',0),replace(printf('%01026d',0),'0','a'),NULL,'file','unknown',NULL,'{}','2026-01-01T00:00:00Z');
                 INSERT INTO passages SELECT knowledge_item_id,1,knowledge_item_id-1,(knowledge_item_id-1)*2,knowledge_item_id*2,'aa' FROM knowledge_items;
                 INSERT INTO knowledge_item_evidence SELECT 1,passage_id FROM passages;
                 INSERT INTO knowledge_item_evidence SELECT knowledge_item_id,knowledge_item_id FROM knowledge_items WHERE knowledge_item_id>1;

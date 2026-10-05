@@ -13,7 +13,7 @@ use time::format_description::well_known::Rfc3339;
 
 use crate::{CommonplaceError, Result};
 
-pub const STORE_FORMAT: &str = "commonplace-store/2";
+pub const STORE_FORMAT: &str = "commonplace-store/3";
 
 const READ_BUSY_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -176,7 +176,7 @@ fn validate_connection(connection: &Connection) -> Result<()> {
     };
     if format != STORE_FORMAT {
         return Err(CommonplaceError::Conflict(format!(
-            "unsupported store format {format:?}; expected {STORE_FORMAT:?}"
+            "unsupported store format {format:?}; expected {STORE_FORMAT:?}; use a fresh directory and explicitly reingest sources; existing data is not modified"
         )));
     }
     let (state_rows, state_ddl): (i64, String) = connection

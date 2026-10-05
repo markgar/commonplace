@@ -18,10 +18,12 @@ cargo run --bin commonplace -- --store .commonplace init
 
 The command creates the SQLite schema, FTS5 and sqlite-vec indexes, and the
 derived stock Oxigraph 0.5.11/RocksDB database. New stores use
-`commonplace-store/2` and `commonplace-config/2`. It is safe to rerun against a
-compatible initialized store with a valid, version-matching graph. Version-1
-Grafeo stores and unknown layouts are rejected without migration, relabeling,
-or automatic repair; use a fresh directory for a new store.
+`commonplace-store/3` and `commonplace-config/3`. It is safe to rerun against a
+compatible initialized store with a valid, version-matching graph. All older
+stores, including /2, are rejected without modification, migration, relabeling,
+or automatic repair. Use a fresh directory and explicitly reingest sources.
+The old store remains intact but this binary cannot read it; source reingestion
+does not transfer old citation IDs or authored knowledge.
 
 Create `schema.json` with the vocabulary you want to add:
 
@@ -47,7 +49,7 @@ cargo run --bin commonplace -- schema apply --describe --json
 ```
 
 JSON is the default output; `--json` explicitly requests the same format. The
-`init` response field names are unchanged; its format is `commonplace-store/2`.
+`init` response field names are unchanged; its format is `commonplace-store/3`.
 Schema and graph operations use the same
 `operation`, `contract_version`, `status`, and `result` envelope.
 
@@ -437,11 +439,11 @@ documents cover Project Lantern, onboarding, escalation handoffs, manager 1:1s,
 community volunteering, and Riley's planning, reflection, and people map.
 
 ```sh
-cargo run --bin commonplace -- --store .commonplace ingest notes.md other.txt
+cargo run --bin commonplace -- --store .commonplace ingest notes.md other.txt --temporal-state unknown
 cargo run --bin commonplace -- --store .commonplace ingest ./notes --recursive \
-  --include '**/*.md' --exclude 'archive/**'
+  --include '**/*.md' --exclude 'archive/**' --temporal-state unknown
 cargo run --bin commonplace -- --store .commonplace ingest notes.md \
-  --title 'Planning notes' --source-type note \
+  --title 'Planning notes' --source-type note --temporal-state dated \
   --occurred-at '2026-09-28T09:00:00-05:00' --metadata '{"project":"commonplace"}'
 cargo run --bin commonplace -- ingest --describe --json
 cargo run --bin commonplace -- --store .commonplace get doc:1
@@ -461,15 +463,21 @@ rejects the command before any publication.
 
 The default source key is a canonical absolute file URI, identical for direct
 and scanned input. Moving a file gives it a new identity. The default title is
-its filename, source type is `file`, source time is null, and metadata is `{}`.
-Metadata overrides apply to every document in the command. Source times are
+its filename, source type is `file`, and metadata is `{}`.
+Every file/scan/stdin command requires **`--temporal-state`**:
+`dated` requires `--occurred-at` as an RFC3339 event timestamp;
+`timeless` means event time does not apply; `unknown` means it applies but is
+unavailable. The latter two prohibit `--occurred-at`. No state is inferred or
+defaulted. Shared intent/metadata options apply to every document in the command;
+mixed-state collections use separate commands or self-contained JSONL. Source times are
 normalized to UTC RFC 3339. Custom metadata is an object with recursively sorted
 keys; floating-point and out-of-range integer numbers are rejected.
 
 Every successful item is fully published in one SQLite transaction, including
 its FTS and 384-dimensional vector rows. Rerunning exact text and metadata returns
 `unchanged` and updates only `last_ingested_at`. Changing either creates an
-immutable revision. Old revisions and passages remain readable; only the current
+immutable revision, including changes to temporal state alone. Old revisions and
+passages remain readable; only the current
 revision is indexed. A concurrent source change during embedding returns a
 rerunnable `conflict` rather than overwriting the other writer's revision.
 Ingestion does not rebuild or open the graph.
@@ -489,7 +497,7 @@ Only newly created revisions use this preparation. Unchanged inputs retain
 their revision/passage IDs and persisted historical boundaries; old citations
 are never rewritten or reindexed. Empty files are valid and
 have zero passages. `get` returns a complete document with all revision IDs, a
-complete revision with its text/metadata and passage IDs, or an exact passage
+complete revision with its text/metadata/temporal state and passage IDs, or an exact passage
 citation with source metadata and half-open byte offsets. It does not load
 models or truncate records. Entity and knowledge reads are described above.
 
@@ -538,14 +546,14 @@ or extract email/PDF contents.
 
 ```sh
 printf 'Riley approved the draft.\n' |
-  commonplace ingest --stdin --source-key notes/42 \
+  commonplace ingest --stdin --source-key notes/42 --temporal-state unknown \
     --title 'Draft decision' --metadata '{"project":"riley"}'
 commonplace ingest --jsonl batch.jsonl
 producer | commonplace ingest --jsonl -
 ```
 
-`--stdin` ingests one document with a required opaque `--source-key`. Existing
-metadata flags apply to that document. Streamed defaults are null title/time,
+`--stdin` ingests one document with required opaque `--source-key` and explicit
+`--temporal-state`. Metadata flags apply to that document. Streamed defaults are null title,
 source type `text`, and metadata `{}`. Empty text is valid. Keys are nonempty
 and NUL-free, are not trimmed or normalized, and share the same namespace as
 file keys. Reusing a key with identical text/metadata returns `unchanged`;
@@ -555,11 +563,14 @@ Changing the key creates a different document.
 Each JSONL physical line is a self-contained record:
 
 ```json
-{"source_key":"notes/42","text":"Riley approved the draft.\n","title":"Draft decision","metadata":{"project":"riley"}}
-{"source_key":"notes/43","text":"Review on Friday.\n","source_type":"note","occurred_at":"2026-09-28T10:00:00-05:00"}
+{"source_key":"notes/42","text":"Riley approved the draft.\n","temporal_state":"unknown","title":"Draft decision","metadata":{"project":"riley"}}
+{"source_key":"notes/43","text":"Review on Friday.\n","temporal_state":"dated","source_type":"note","occurred_at":"2026-09-28T10:00:00-05:00"}
+{"source_key":"notes/44","text":"Project reference material.\n","temporal_state":"timeless"}
 ```
 
-`source_key` and `text` are required strings. Optional fields are `title`,
+`source_key`, `text` and `temporal_state` are required strings. Dated records
+require valid string `occurred_at`; timeless/unknown records omit it. Explicit
+null state/time is rejected. Optional fields are `title`,
 `source_type`, `occurred_at`, and `metadata`. Unknown fields and duplicate object
 keys (including inside metadata) fail the item. JSONL does not accept global
 metadata overrides or directory scan options. Exactly one input mode is allowed;
@@ -587,7 +598,7 @@ All modes use the existing stdout result and exit precedence above; raw stdin
 body failures are item errors, not command-level errors. Invalid command options
 and failure opening a JSONL file use the existing command-error path.
 `ingest --describe` provides generated command `input_schema`/`example` and
-ingest-only JSONL `record_schema`/`record_example` fields, using the execution
+ingest-only JSONL `record_schema`/`record_example`/`record_examples` fields, using the execution
 validators. Command `source_type: null` means resolve the mode default, not
 store a null source type. Semantic checks also enforce canonical metadata,
 timestamps, byte limits, and duplicate fields.
@@ -604,21 +615,34 @@ cargo run --bin commonplace -- --store .commonplace search 'escalation acknowled
 ```
 
 Search returns ranked current-revision passages with complete exact citations:
-the document/revision/passage IDs, source key/title/type/time/metadata, ordinal,
+the document/revision/passage IDs, source key/title/type/temporal state/time/metadata, ordinal,
 and half-open byte offsets from `get`, plus 1-based `rank`. The common `search`
-envelope has `result: {items, truncated}`. Empty results are
-`{"items":[],"truncated":false}`. There is no score threshold: unrelated queries
+envelope has `result: {items, truncated, temporal_filter}`. Without since,
+`temporal_filter` is null. There is no score threshold: unrelated queries
 can return nearest passages rather than an empty list.
 
 The query is plain text, not FTS syntax. Whitespace-separated terms are safely
 quoted and ORed for FTS5; the original query goes to the pinned embedding and
 reranker. Queries must be nonblank, contain no NUL, and fit 4096 UTF-8 bytes and
 64 terms. `--limit` defaults to **10**, accepts **0–50**, and never disables model
-validation. `--since` is inclusive RFC3339 source time, with nanosecond precision;
-it excludes unknown times. Source type filters are exact and case-sensitive,
+validation. `--since` is an inclusive RFC3339 dated-source cutoff, with nanosecond
+precision, **plus timeless context**; it excludes unknown and older dated sources.
+Ingestion time never substitutes for event time. Source type filters are exact and case-sensitive,
 ORed when repeated, with at most 32 supplied values and 4096 aggregate UTF-8 bytes.
-Files ingested without metadata overrides have source type `file` and null time;
-dates written in Markdown are not automatically extracted.
+Files use source type `file` unless overridden; temporal intent is always explicit.
+Dates written in Markdown/frontmatter or filenames are not automatically extracted.
+
+With `--since`, `temporal_filter` contains normalized `since`,
+`includes_timeless: true`, `coverage: {eligible_dated, timeless, older_dated, excluded_unknown}`, and
+`diagnostics`. Counts concern **current sources after source-type filters**, not
+query matches, passage phrase constraints, overlapping passages, historical
+revisions or candidates; empty sources count.
+When any unknown dates were excluded, diagnostics contains
+`{"code":"unknown_dates_excluded","message":"Sources with unknown event dates are excluded by --since; results do not cover those sources."}`,
+even with nonempty/empty results or zero limit. Otherwise diagnostics is empty.
+These counts describe collection coverage, not exhaustive relevance or certainty
+that no evidence exists. Returned items and authoritative revision/passage/
+knowledge-support reads retain their immutable cited `temporal_state`.
 
 Use optional single `--must-contain 'ACME Corp'` to require a **literal contiguous
 phrase in each returned passage**, not elsewhere in the source, title, or
@@ -750,7 +774,7 @@ File status is `unavailable`, `absent`, or `loaded`. Value source is
 the last reports a null strict override so the stock model cache applies.
 
 This user file is not `<store>/config.json`. The latter is the backend-managed
-`commonplace-config/2` layout marker created by `init`. Commonplace does not
+`commonplace-config/3` layout marker created by `init`. Commonplace does not
 write, migrate, repair, or profile user configuration. `config show` does not
 check path health. Only explicit `init` may create the selected store; a selected
 strict cache never downloads or falls back when artifacts are missing or corrupt.
@@ -820,7 +844,7 @@ COMMONPLACE_MODEL_CACHE=/absolute/path/to/prepared/pinned-models \
 
 The file check runs the public binary over multiple files, repeats ingestion,
 makes metadata and content revisions, reads exact old/new evidence, and checks current
-FTS/vector IDs on a version-2 store. It verifies ingestion leaves graph files
+FTS/vector IDs on a version-3 store. It verifies ingestion leaves graph files
 unchanged, then records a multiply-typed entity, cited relationship and literal
 decision through the public CLI, compares old/new passage citations with exact
 reads, and repeats after rebuild/reopen.

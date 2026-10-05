@@ -95,6 +95,7 @@ pub fn matches(revision: &DocumentRevision, input: &DocumentInput) -> bool {
     revision.text == input.text
         && revision.title == input.title
         && revision.source_type == input.source_type
+        && revision.temporal_state == input.temporal_state
         && revision.occurred_at == input.occurred_at
         && revision.metadata == input.metadata
 }
@@ -190,8 +191,8 @@ pub fn publish(
     transaction
         .execute(
             "INSERT INTO document_revisions(document_id, revision_number, revision_digest, text,
-            title, source_type, occurred_at, metadata_json, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            title, source_type, temporal_state, occurred_at, metadata_json, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 document_id.value(),
                 revision_number,
@@ -199,6 +200,7 @@ pub fn publish(
                 input.text,
                 input.title,
                 input.source_type,
+                input.temporal_state.as_str(),
                 input.occurred_at,
                 input.metadata_json()?,
                 timestamp

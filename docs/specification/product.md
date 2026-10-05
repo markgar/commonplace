@@ -78,7 +78,8 @@ Every source adapter produces a `DocumentInput`:
 | `text` | Exact UTF-8 source text |
 | `title` | Optional display title |
 | `source_type` | Descriptive source category |
-| `occurred_at` | Optional source timestamp |
+| `temporal_state` | Required explicit `dated`, `timeless`, or `unknown` |
+| `occurred_at` | RFC3339 event timestamp required only for `dated` |
 | `metadata` | Small JSON object |
 
 SQLite maps `source_key` to an internal document ID. Examples include an email
@@ -90,10 +91,10 @@ URI.
 The CLI supports:
 
 ```sh
-commonplace ingest document.md
-commonplace ingest document-a.md document-b.md
-commonplace ingest ./notes --recursive
-commonplace ingest --stdin --source-key teams/message/123
+commonplace ingest document.md --temporal-state timeless
+commonplace ingest document-a.md document-b.md --temporal-state unknown
+commonplace ingest ./notes --recursive --temporal-state unknown
+commonplace ingest --stdin --source-key teams/message/123 --temporal-state dated --occurred-at 2026-09-28T10:00:00Z
 commonplace ingest --jsonl documents.jsonl
 producer | commonplace ingest --jsonl -
 ```
@@ -122,8 +123,16 @@ Exceeding the document-enumeration limit rejects the command before publication.
 An input that disappears during reading fails as an item, never as an implicit
 deletion.
 
-File defaults are title equal to the filename, source type `file`, no source time,
-and empty metadata. `--title`, `--source-type`, `--occurred-at`, and `--metadata`
+Every input requires explicit temporal intent: `dated` means a known event time
+and requires valid RFC3339 `occurred_at`; `timeless` means event time does not
+apply; `unknown` means event time applies but is unavailable. The latter two
+prohibit a timestamp. There is no omitted/null/default state or inference from
+text, metadata, filenames, frontmatter, or ingestion time.
+
+File defaults are title equal to the filename, source type `file`, and empty
+metadata. Required `--temporal-state` applies to every document in a file/scan
+command; mixed-state batches use separate commands or self-contained JSONL.
+`--title`, `--source-type`, `--occurred-at`, and `--metadata`
 override those fields for every document in that command. The metadata argument
 is a JSON object using persistence's canonical value set; timestamps normalize
 to UTC RFC 3339. P3 establishes these file overrides; P9 adds generic streamed
@@ -136,12 +145,14 @@ saved JSON Lines already serves the current agent workflow without another
 batch envelope or path-reference mapping format.
 
 Exactly one input mode is selected. `--stdin` accepts one exact UTF-8 document
-and requires `--source-key`; the existing metadata flags apply to that document.
+and requires `--source-key` and `--temporal-state`; metadata flags apply to that document.
 JSON Lines accepts a filename or `-` for stdin. Each physical line is a
-self-contained object with required string `source_key` and `text`, optional
+self-contained object with required string `source_key`, `text`, and `temporal_state`, optional
 `title`, `source_type`, `occurred_at`, and `metadata`, and no unknown or duplicate
-object fields. JSON Lines rejects command-level metadata overrides. Streamed
-defaults are null title/time, source type `text`, and empty metadata. Source
+object fields. Dated records require a string `occurred_at`; timeless/unknown
+records omit it. Explicit JSON null is not a timestamp and is rejected.
+JSON Lines rejects command-level metadata overrides, including temporal state.
+Streamed defaults are null title, source type `text`, and empty metadata. Source
 keys are opaque, nonempty, NUL-free strings in the existing shared namespace;
 they are not trimmed, case-folded, or derived from input locations.
 
@@ -164,7 +175,7 @@ The current revision is the greatest revision number for a document. All prior
 revisions remain readable so existing citations remain resolvable.
 
 The revision digest covers exact text and canonical user-visible metadata:
-title, source type, occurred-at time, and custom metadata.
+title, source type, temporal state, occurred-at time, and custom metadata.
 
 ### 3.4 Batch ingestion
 
@@ -284,7 +295,7 @@ Every result includes:
 
 - exact passage text;
 - document, revision, and passage IDs;
-- source title, type, time, and metadata;
+- source title, type, temporal state, time, and metadata;
 - exact byte offsets;
 - score or rank information; and
 - explicit truncation information.
@@ -318,14 +329,29 @@ receive the original query. Blank/NUL queries are rejected. A query is bounded
 to 4096 UTF-8 bytes and 64 terms. Repeatable source types are case-sensitive
 exact alternatives, bounded to 32 supplied values and 4096 aggregate UTF-8 bytes;
 empty/NUL values are rejected. `--since` is an inclusive RFC3339 instant normalized
-to UTC without discarding fractional seconds. Unknown source times are excluded
-only when that filter is present.
+to UTC without discarding fractional seconds. It admits current dated revisions
+at/after that instant **plus timeless context**, and excludes older dated and
+unknown sources. Both native candidate paths apply this predicate before their
+limits; ingestion/creation time never substitutes for event time. Without
+`--since`, all three states remain eligible.
 
 `--limit` defaults to 10 and accepts 0 through 50. Search returns the common
-envelope with operation `search`, status `complete`, and result `{items, truncated}`.
+envelope with operation `search`, status `complete`, and result
+`{items, truncated, temporal_filter}`.
 Each item has 1-based `rank` plus the same complete evidence fields as passage
 `get`. Empty eligible results return `items: []`. Zero limit retains no items,
 but still checks required models and indexes.
+
+`temporal_filter` is null without `--since`. With it, the object contains normalized
+`since`, `includes_timeless: true`, `coverage`, and `diagnostics`. Coverage counts
+current sources after source-type filters, including empty text, not historical
+revisions, query matches, passages, candidates, or retained results:
+`eligible_dated`, `timeless`, `older_dated`, and `excluded_unknown`. Counts use the
+same SQLite read snapshot as search. Diagnostics contains `unknown_dates_excluded`
+with an explicit coverage warning whenever excluded_unknown is nonzero, even
+with nonempty results, empty results, or zero limit; otherwise it is empty.
+Timeless inclusion is a filter semantic, not a claim that timeless sources match.
+Coverage does not establish exhaustive relevance or certainty that no evidence exists.
 
 `truncated` reports collection omissions: a candidate sentinel proves more
 candidates, fusion exceeds the rerank bound, or final results exceed `--limit`.

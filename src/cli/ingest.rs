@@ -10,7 +10,7 @@ use serde_json::Map;
 use crate::adapters::sources::{self, FileOptions, MetadataOverrides};
 use crate::adapters::streams::{self, JsonLines};
 use crate::app::ingest::{self, InputItem, OperationConfig};
-use crate::domain::documents::DocumentInput;
+use crate::domain::documents::{DocumentInput, TemporalState};
 use crate::providers::embeddings::LocalEmbeddingModel;
 use crate::{CommonplaceError, Result};
 
@@ -32,7 +32,7 @@ pub(super) struct IngestArgs {
     #[schemars(length(min = 1), regex(pattern = "^[^\\u0000]+$"))]
     source_key: Option<String>,
     /// Read self-contained JSON records, one per line; use - for stdin.
-    #[arg(long, conflicts_with_all = ["describe", "stdin", "source_key", "recursive", "include", "exclude", "title", "source_type", "occurred_at", "metadata"])]
+    #[arg(long, conflicts_with_all = ["describe", "stdin", "source_key", "recursive", "include", "exclude", "title", "source_type", "temporal_state", "occurred_at", "metadata"])]
     jsonl: Option<PathBuf>,
     /// Recurse into directories (discovered symlinks are always skipped).
     #[arg(long, conflicts_with = "describe")]
@@ -50,6 +50,9 @@ pub(super) struct IngestArgs {
     #[arg(long, conflicts_with = "describe")]
     #[schemars(length(min = 1))]
     source_type: Option<String>,
+    /// Required for files/stdin: dated (known event time), timeless (not applicable), unknown (unavailable).
+    #[arg(long, conflicts_with = "describe")]
+    temporal_state: Option<TemporalState>,
     /// RFC 3339 source time for every document, normalized to UTC.
     #[arg(long, conflicts_with = "describe")]
     occurred_at: Option<String>,
@@ -82,13 +85,15 @@ pub(super) struct IngestArgs {
 
 fn input_modes(schema: &mut schemars::Schema) {
     schema.insert("oneOf".into(), serde_json::json!([
-        {"properties": {
+        {"required": ["temporal_state"], "properties": {
             "paths": {"minItems": 1}, "stdin": {"const": false},
-            "source_key": {"type": "null"}, "jsonl": {"type": "null"}
+            "source_key": {"type": "null"}, "jsonl": {"type": "null"},
+            "temporal_state": {"type": "string"}
         }},
-        {"properties": {
+        {"required": ["temporal_state"], "properties": {
             "paths": {"maxItems": 0}, "stdin": {"const": true},
             "source_key": {"type": "string"}, "jsonl": {"type": "null"},
+            "temporal_state": {"type": "string"},
             "recursive": {"const": false}, "include": {"maxItems": 0}, "exclude": {"maxItems": 0}
         }},
         {"properties": {
@@ -96,9 +101,17 @@ fn input_modes(schema: &mut schemars::Schema) {
             "source_key": {"type": "null"}, "jsonl": {"type": "string"},
             "recursive": {"const": false}, "include": {"maxItems": 0}, "exclude": {"maxItems": 0},
             "title": {"type": "null"}, "source_type": {"type": "null"},
-            "occurred_at": {"type": "null"}, "metadata": {"type": "null"}
+            "temporal_state": {"type": "null"}, "occurred_at": {"type": "null"}, "metadata": {"type": "null"}
         }}
     ]));
+    schema.insert(
+        "allOf".into(),
+        serde_json::json!([{
+            "if": {"required": ["temporal_state"], "properties": {"temporal_state": {"const": "dated"}}},
+            "then": {"required": ["occurred_at"], "properties": {"occurred_at": {"type": "string", "format": "date-time"}}},
+            "else": {"properties": {"occurred_at": {"type": "null"}}}
+        }]),
+    );
 }
 
 #[derive(Debug, Serialize)]
@@ -107,10 +120,18 @@ pub struct IngestDescription {
     example: serde_json::Value,
     record_schema: schemars::Schema,
     record_example: serde_json::Value,
+    record_examples: Vec<serde_json::Value>,
 }
 
 impl IngestArgs {
-    fn options(&self) -> Result<(OperationConfig, MetadataOverrides)> {
+    fn options(&self) -> Result<(OperationConfig, Option<MetadataOverrides>)> {
+        if self.jsonl.is_none() {
+            self.temporal_state.ok_or_else(|| {
+                CommonplaceError::InvalidInput(
+                    "explicit temporal intent is required: use --temporal-state dated with --occurred-at, timeless when event time does not apply, or unknown when event time is unavailable".into(),
+                )
+            })?.validate(self.occurred_at.as_deref())?;
+        }
         validate(&serde_json::to_value(self)?, &generated_schema::<Self>())?;
         let config = OperationConfig {
             maximum_source_bytes: self.max_source_bytes,
@@ -121,6 +142,9 @@ impl IngestArgs {
             writer_lock_timeout: Duration::from_millis(self.writer_lock_timeout_ms),
         };
         config.validate()?;
+        if self.jsonl.is_some() {
+            return Ok((config, None));
+        }
         if self
             .metadata
             .as_ref()
@@ -151,6 +175,9 @@ impl IngestArgs {
                 .source_type
                 .clone()
                 .unwrap_or_else(|| if self.stdin { "text" } else { "file" }.into()),
+            temporal_state: self
+                .temporal_state
+                .ok_or_else(|| CommonplaceError::InvalidInput("missing --temporal-state".into()))?,
             occurred_at: self.occurred_at.clone(),
             metadata,
         }
@@ -158,10 +185,11 @@ impl IngestArgs {
         let metadata = MetadataOverrides {
             title: normalized.title,
             source_type: normalized.source_type,
+            temporal_state: normalized.temporal_state,
             occurred_at: normalized.occurred_at,
             metadata: normalized.metadata,
         };
-        Ok((config, metadata))
+        Ok((config, Some(metadata)))
     }
 }
 
@@ -181,6 +209,7 @@ pub(super) fn execute(
             exclude: Vec::new(),
             title: None,
             source_type: None,
+            temporal_state: Some(TemporalState::Timeless),
             occurred_at: None,
             metadata: None,
             max_source_bytes: OperationConfig::default().maximum_source_bytes,
@@ -193,10 +222,17 @@ pub(super) fn execute(
         };
         example_args.options()?;
         let record_schema = streams::record_schema();
-        let record_example = serde_json::json!({"source_key": "notes/42", "text": "Exact text\n"});
-        validate(&record_example, &record_schema)?;
-        let record = streams::parse_record(&serde_json::to_vec(&record_example)?)?;
-        DocumentInput::from(record).normalize()?;
+        let record_example = serde_json::json!({"source_key": "notes/42", "text": "Exact text\n", "temporal_state": "timeless"});
+        let record_examples = vec![
+            record_example.clone(),
+            serde_json::json!({"source_key": "notes/43", "text": "Dated evidence\n", "temporal_state": "dated", "occurred_at": "2026-09-28T10:00:00-05:00"}),
+            serde_json::json!({"source_key": "notes/44", "text": "Event date unavailable\n", "temporal_state": "unknown"}),
+        ];
+        for example in &record_examples {
+            validate(example, &record_schema)?;
+            let record = streams::parse_record(&serde_json::to_vec(example)?)?;
+            DocumentInput::from(record).normalize()?;
+        }
         return Ok(CommandResponse::new(
             "ingest.describe",
             "complete",
@@ -205,12 +241,16 @@ pub(super) fn execute(
                 example: serde_json::to_value(example_args)?,
                 record_schema,
                 record_example,
+                record_examples,
             }),
         ));
     }
     let (config, metadata) = args.options()?;
     let mut model = LocalEmbeddingModel::new(model_cache, config.embedding_batch_size);
     let result = if args.stdin {
+        let metadata = metadata.ok_or_else(|| {
+            CommonplaceError::InvalidInput("stdin requires explicit temporal metadata".into())
+        })?;
         let source_key = args.source_key.ok_or_else(|| {
             CommonplaceError::InvalidInput("--stdin requires --source-key".into())
         })?;
@@ -240,6 +280,11 @@ pub(super) fn execute(
         );
         ingest::ingest(root, items, &mut model, &config)?
     } else {
+        let metadata = metadata.ok_or_else(|| {
+            CommonplaceError::InvalidInput(
+                "file ingestion requires explicit temporal metadata".into(),
+            )
+        })?;
         let files = sources::enumerate(
             &FileOptions {
                 paths: args.paths,

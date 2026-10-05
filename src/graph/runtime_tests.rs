@@ -229,6 +229,7 @@ fn removal_store() -> (tempfile::TempDir, std::path::PathBuf) {
             title: None,
             source_type: "test".into(),
             occurred_at: None,
+            temporal_state: crate::domain::documents::TemporalState::Unknown,
             metadata: Default::default(),
         },
         None,

@@ -58,7 +58,7 @@ enum Command {
         /// Literal contiguous passage phrase; Unicode lowercase matching, no normalization.
         #[arg(long)]
         must_contain: Option<String>,
-        /// Inclusive source time (RFC3339); excludes sources without a time.
+        /// Inclusive dated source cutoff (RFC3339), plus timeless context; excludes unknown dates and reports coverage.
         #[arg(long)]
         since: Option<String>,
         /// Exact source type; repeat to match any supplied type.
@@ -493,7 +493,12 @@ mod tests {
             .unwrap()
         };
         run(&["init"]);
-        let ingested = run(&["ingest", source.to_str().unwrap()]);
+        let ingested = run(&[
+            "ingest",
+            "--temporal-state",
+            "unknown",
+            source.to_str().unwrap(),
+        ]);
         let super::CommandResult::Ingest(ingested) = ingested.result else {
             panic!("ingest");
         };

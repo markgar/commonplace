@@ -36,7 +36,7 @@ fn real_model_search_offline() {
     };
     assert_eq!(
         execute(&["search", "Lantern"])["result"],
-        json!({"items":[],"truncated":false})
+        json!({"items":[],"truncated":false,"temporal_filter":null})
     );
     let corpus = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/meeting-notes");
     let notes = corpus.join("Obsidian Notes");
@@ -44,6 +44,8 @@ fn real_model_search_offline() {
     assert_eq!(
         execute(&[
             "ingest",
+            "--temporal-state",
+            "dated",
             notes.to_str().unwrap(),
             "--source-type",
             "note",
@@ -53,13 +55,21 @@ fn real_model_search_offline() {
         25
     );
     assert_eq!(
-        execute(&["ingest", recaps.to_str().unwrap(), "--source-type", "recap"])["result"]["summary"]
-            ["added"],
+        execute(&[
+            "ingest",
+            "--temporal-state",
+            "unknown",
+            recaps.to_str().unwrap(),
+            "--source-type",
+            "recap"
+        ])["result"]["summary"]["added"],
         11
     );
     assert_eq!(
         execute(&[
             "ingest",
+            "--temporal-state",
+            "dated",
             notes.to_str().unwrap(),
             "--source-type",
             "note",
@@ -154,14 +164,13 @@ fn real_model_search_offline() {
             "2026-09-28T00:00:00.000000002Z",
         ],
     ] {
-        assert_eq!(
-            execute(&args)["result"],
-            json!({"items":[],"truncated":false})
-        );
+        let result = execute(&args);
+        assert_eq!(result["result"]["items"], json!([]));
+        assert_eq!(result["result"]["truncated"], false);
     }
     assert_eq!(
         execute(&["search", "Lantern", "--limit", "0"])["result"],
-        json!({"items":[],"truncated":true})
+        json!({"items":[],"truncated":true,"temporal_filter":null})
     );
 
     let models: Value =
@@ -227,7 +236,7 @@ fn real_model_search_offline() {
     assert!(output.stderr.is_empty());
     assert_eq!(
         serde_json::from_slice::<Value>(&output.stdout).unwrap()["result"],
-        json!({"items":[],"truncated":true})
+        json!({"items":[],"truncated":true,"temporal_filter":null})
     );
 
     use commonplace::providers::reranker::{LocalReranker, Reranker};
@@ -272,7 +281,14 @@ fn real_model_stream_ingest_get_offline() {
     };
     let text = "\u{feff}Riley approved the draft.\r\n\r\nExact \0 e\u{301} \u{1f980}\n";
     let (exit, added) = run(
-        &["ingest", "--stdin", "--source-key", "notes/42"],
+        &[
+            "ingest",
+            "--temporal-state",
+            "unknown",
+            "--stdin",
+            "--source-key",
+            "notes/42",
+        ],
         text.as_bytes(),
     );
     assert_eq!(exit, 0);
@@ -280,7 +296,7 @@ fn real_model_stream_ingest_get_offline() {
     assert!(!first["passage_ids"].as_array().unwrap().is_empty());
     let original = store.success(&["get", first["revision_id"].as_str().unwrap()]);
     assert_eq!(original["result"]["text"], text);
-    let mut record = json!({"source_key":"notes/42","text":text});
+    let mut record = json!({"temporal_state":"unknown","source_key":"notes/42","text":text});
     let (exit, same) = run(
         &["ingest", "--jsonl", "-"],
         &serde_json::to_vec(&record).unwrap(),
@@ -310,7 +326,7 @@ fn real_model_stream_ingest_get_offline() {
         "{}\n{{bad}}\n{}\n{}\n",
         record,
         record,
-        json!({"source_key":"notes/43","text":"Review the draft on Friday."})
+        json!({"temporal_state":"unknown","source_key":"notes/43","text":"Review the draft on Friday."})
     );
     let (exit, partial) = run(&["ingest", "--jsonl", "-"], lines.as_bytes());
     assert_eq!(exit, 2);
@@ -372,7 +388,7 @@ fn real_model_ingest_get_offline() {
     let store = Store::new();
     assert_eq!(
         store.success(&["init"])["result"]["format"],
-        "commonplace-store/2"
+        "commonplace-store/3"
     );
     let graph_before_ingest = store.graph_files();
     let notes = store.directory.path().join("notes");
@@ -404,6 +420,8 @@ fn real_model_ingest_get_offline() {
     };
     let added = execute(&[
         "ingest",
+        "--temporal-state",
+        "unknown",
         notes.to_str().unwrap(),
         "--recursive",
         "--embedding-batch-size",
@@ -417,6 +435,8 @@ fn real_model_ingest_get_offline() {
         let mut command = store.command();
         command.env("COMMONPLACE_MODEL_CACHE", &cache).args([
             "ingest",
+            "--temporal-state",
+            "unknown",
             "--stdin",
             "--source-key",
             "release/decision",
@@ -439,18 +459,26 @@ fn real_model_ingest_get_offline() {
         same_stream["result"]["items"][0]["revision_id"],
         streamed["result"]["items"][0]["revision_id"]
     );
-    let unchanged = execute(&["ingest", a.to_str().unwrap(), b.to_str().unwrap()]);
+    let unchanged = execute(&[
+        "ingest",
+        "--temporal-state",
+        "unknown",
+        a.to_str().unwrap(),
+        b.to_str().unwrap(),
+    ]);
     assert_eq!(unchanged["result"]["summary"]["unchanged"], 2);
     assert_eq!(unchanged["result"]["items"][0]["document_id"], doc);
     let metadata_revision = execute(&[
         "ingest",
+        "--temporal-state",
+        "unknown",
         a.to_str().unwrap(),
         "--metadata",
         "{\"z\":true,\"a\":{\"n\":2}}",
     ]);
     assert_eq!(metadata_revision["result"]["summary"]["updated"], 1);
     std::fs::write(&a, "revised release planning").unwrap();
-    let updated = execute(&["ingest", a.to_str().unwrap()]);
+    let updated = execute(&["ingest", "--temporal-state", "unknown", a.to_str().unwrap()]);
     assert_eq!(updated["result"]["summary"]["updated"], 1);
     let record = execute(&["get", doc]);
     assert_eq!(
@@ -557,6 +585,8 @@ fn real_model_ingest_get_offline() {
         .env("HF_HOME", &hf_home)
         .args([
             "ingest",
+            "--temporal-state",
+            "unknown",
             b.to_str().unwrap(),
             "--title",
             "Default cache hit",
@@ -1030,7 +1060,7 @@ fn real_model_ingest_get_offline() {
         execute(&["graph", "query", retained_fact_query])["result"],
         retained_facts
     );
-    let again = execute(&["ingest", a.to_str().unwrap()]);
+    let again = execute(&["ingest", "--temporal-state", "unknown", a.to_str().unwrap()]);
     assert_eq!(again["result"]["summary"]["added"], 1);
     assert_ne!(again["result"]["items"][0]["document_id"], doc);
     assert_eq!(again["result"]["items"][0]["source_key"], source_key);
@@ -1148,7 +1178,7 @@ fn real_model_ingest_get_offline() {
         execute(&["graph", "query", all_query])["result"],
         after_withdrawal
     );
-    let final_ingest = execute(&["ingest", a.to_str().unwrap()]);
+    let final_ingest = execute(&["ingest", "--temporal-state", "unknown", a.to_str().unwrap()]);
     assert_eq!(final_ingest["result"]["summary"]["added"], 1);
     assert_ne!(
         final_ingest["result"]["items"][0]["document_id"],

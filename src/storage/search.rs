@@ -2,22 +2,50 @@ use rusqlite::functions::FunctionFlags;
 use rusqlite::{Connection, params};
 
 use crate::domain::ids::PassageId;
-use crate::domain::search::{CANDIDATE_LIMIT, Candidates, SearchFilters};
+use crate::domain::search::{CANDIDATE_LIMIT, Candidates, SearchFilters, TemporalCoverage};
 use crate::{CommonplaceError, Result};
 
 use super::database::storage_error;
 
 // Normalized UTC timestamps sort chronologically after removing Z, including
 // subsecond boundaries. Keep comparison textual to avoid SQLite's millisecond rounding.
-const ELIGIBLE: &str = "
+const CURRENT: &str = "
     r.revision_number = (
         SELECT max(current.revision_number) FROM document_revisions current
         WHERE current.document_id = r.document_id
     )
-    AND (?2 IS NULL OR rtrim(r.occurred_at, 'Z') >= rtrim(?2, 'Z'))
+";
+const SOURCE_TYPES: &str = "
     AND (json_array_length(?3) = 0 OR r.source_type IN (SELECT value FROM json_each(?3)))
+";
+const PASSAGE_PHRASE: &str = "
     AND (?5 IS NULL OR passage_contains(p.text, ?5))
 ";
+const TEMPORAL: &str = "
+    AND (?2 IS NULL OR r.temporal_state = 'timeless'
+        OR (r.temporal_state = 'dated' AND rtrim(r.occurred_at, 'Z') >= rtrim(?2, 'Z')))
+";
+
+pub fn temporal_coverage(
+    connection: &Connection,
+    filters: &SearchFilters,
+) -> Result<TemporalCoverage> {
+    connection.query_row(
+        &format!("SELECT
+            count(*) FILTER (WHERE r.temporal_state = 'dated' AND rtrim(r.occurred_at, 'Z') >= rtrim(?2, 'Z')),
+            count(*) FILTER (WHERE r.temporal_state = 'timeless'),
+            count(*) FILTER (WHERE r.temporal_state = 'dated' AND rtrim(r.occurred_at, 'Z') < rtrim(?2, 'Z')),
+            count(*) FILTER (WHERE r.temporal_state = 'unknown')
+            FROM document_revisions r WHERE {CURRENT} {SOURCE_TYPES}"),
+        params![rusqlite::types::Null, filters.since, serde_json::to_string(&filters.source_types)?],
+        |row| Ok(TemporalCoverage {
+            eligible_dated: row.get(0)?,
+            timeless: row.get(1)?,
+            older_dated: row.get(2)?,
+            excluded_unknown: row.get(3)?,
+        }),
+    ).map_err(storage_error)
+}
 
 pub fn validate_representation(connection: &Connection) -> Result<()> {
     let sql: String = connection
@@ -36,7 +64,7 @@ pub fn validate_representation(connection: &Connection) -> Result<()> {
         != "createvirtualtablepassage_vectorsusingvec0(passage_idintegerprimarykey,embeddingfloat[384])"
     {
         return Err(CommonplaceError::Conflict(
-            "incompatible passage_vectors declaration; expected the version-2 384-dimensional float index; use a compatible store".into(),
+            "incompatible passage_vectors declaration; expected the version-3 384-dimensional float index; use a compatible store".into(),
         ));
     }
     for (table, key) in [("passage_fts", "rowid"), ("passage_vectors", "passage_id")] {
@@ -77,7 +105,7 @@ pub fn lexical(
             "SELECT p.passage_id FROM passage_fts
              JOIN passages p ON p.passage_id = passage_fts.rowid
              JOIN document_revisions r USING(revision_id)
-             WHERE passage_fts MATCH ?1 AND {ELIGIBLE}
+             WHERE passage_fts MATCH ?1 AND {CURRENT} {SOURCE_TYPES} {TEMPORAL} {PASSAGE_PHRASE}
              ORDER BY bm25(passage_fts), p.passage_id LIMIT ?4"
         ),
         &query,
@@ -100,7 +128,7 @@ pub fn vector(
             "SELECT p.passage_id FROM passage_vectors v
              JOIN passages p ON p.passage_id = v.passage_id
              JOIN document_revisions r USING(revision_id)
-             WHERE {ELIGIBLE}
+             WHERE {CURRENT} {SOURCE_TYPES} {TEMPORAL} {PASSAGE_PHRASE}
              ORDER BY vec_distance_L2(v.embedding, ?1), p.passage_id LIMIT ?4"
         ),
         &bytes,

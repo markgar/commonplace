@@ -101,7 +101,8 @@ Ingest only the two source directories below, not the fixture root. This keeps
 ```sh
 cargo run --bin commonplace -- --store .commonplace init
 cargo run --bin commonplace -- --store .commonplace ingest \
-  "fixtures/meeting-notes/Obsidian Notes" "fixtures/meeting-notes/AI Summaries"
+  "fixtures/meeting-notes/Obsidian Notes" "fixtures/meeting-notes/AI Summaries" \
+  --temporal-state unknown
 ```
 
 On a fresh store, ingestion adds 36 documents. Repeating it without edits reports
@@ -109,6 +110,12 @@ On a fresh store, ingestion adds 36 documents. Repeating it without edits report
 are not fixed fixture identifiers. Ingestion creates embeddings locally; missing
 model artifacts may be downloaded unless a strict offline cache is configured
 (see the root README).
+
+This blanket demo classifies event dates as unknown; since-search therefore
+excludes these sources and warns about coverage. Commonplace does not extract
+filename/frontmatter dates. To use their actual event dates, the caller supplies
+dated JSONL records with explicit RFC3339 occurred_at. Classify truly timeless
+reference material explicitly as timeless instead.
 
 To demonstrate revisions, copy the two input directories to a scratch directory,
 ingest those copies, then edit and re-ingest a file at the same path. The document

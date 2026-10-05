@@ -1,6 +1,6 @@
 use rusqlite::{Connection, OptionalExtension};
 
-use crate::domain::documents::{Document, DocumentRevision, Evidence};
+use crate::domain::documents::{Document, DocumentRevision, Evidence, TemporalState};
 use crate::domain::ids::{DocumentId, PassageId, RevisionId};
 use crate::{CommonplaceError, Result};
 
@@ -49,10 +49,11 @@ pub fn revision(connection: &Connection, id: RevisionId) -> Result<DocumentRevis
         occurred_at,
         metadata_json,
         created_at,
+        temporal_state,
     ) = connection
         .query_row(
             "SELECT r.document_id, d.source_key, r.revision_number, r.revision_digest, r.text,
-                r.title, r.source_type, r.occurred_at, r.metadata_json, r.created_at
+                r.title, r.source_type, r.occurred_at, r.metadata_json, r.created_at, r.temporal_state
          FROM document_revisions r JOIN documents d USING(document_id) WHERE r.revision_id = ?1",
             [id.value()],
             |row| {
@@ -64,9 +65,10 @@ pub fn revision(connection: &Connection, id: RevisionId) -> Result<DocumentRevis
                     row.get(4)?,
                     row.get(5)?,
                     row.get(6)?,
-                    row.get(7)?,
+                    row.get::<_, Option<String>>(7)?,
                     row.get::<_, String>(8)?,
                     row.get(9)?,
+                    row.get::<_, String>(10)?,
                 ))
             },
         )
@@ -82,6 +84,7 @@ pub fn revision(connection: &Connection, id: RevisionId) -> Result<DocumentRevis
         text,
         title,
         source_type,
+        temporal_state: decode_temporal_state(&temporal_state, occurred_at.as_deref())?,
         occurred_at,
         metadata: serde_json::from_str(&metadata_json)?,
         created_at,
@@ -125,9 +128,23 @@ pub fn passage(connection: &Connection, id: PassageId) -> Result<Evidence> {
         text,
         title: revision.title,
         source_type: revision.source_type,
+        temporal_state: revision.temporal_state,
         occurred_at: revision.occurred_at,
         metadata: revision.metadata,
     })
+}
+
+pub(crate) fn decode_temporal_state(
+    value: &str,
+    occurred_at: Option<&str>,
+) -> Result<TemporalState> {
+    let state: TemporalState = value.parse().map_err(|error| {
+        CommonplaceError::Storage(format!("invalid stored temporal_state: {error}"))
+    })?;
+    state.validate(occurred_at).map_err(|error| {
+        CommonplaceError::Storage(format!("inconsistent stored temporal state: {error}"))
+    })?;
+    Ok(state)
 }
 
 fn not_found(id: impl std::fmt::Display) -> CommonplaceError {

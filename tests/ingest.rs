@@ -37,7 +37,14 @@ fn public_stream_modes_preserve_identity_defaults_and_file_behavior() {
     let graph = graph_files(&store);
     let (exit, first) = stream_run(
         &store,
-        &["ingest", "--stdin", "--source-key", " notes/42 "],
+        &[
+            "ingest",
+            "--temporal-state",
+            "unknown",
+            "--stdin",
+            "--source-key",
+            " notes/42 ",
+        ],
         b"",
     );
     assert_eq!(exit, 0);
@@ -50,7 +57,7 @@ fn public_stream_modes_preserve_identity_defaults_and_file_behavior() {
     assert_eq!(revision["result"]["title"], Value::Null);
     assert_eq!(revision["result"]["occurred_at"], Value::Null);
     assert_eq!(revision["result"]["metadata"], json!({}));
-    let record = br#"{"source_key":" notes/42 ","text":""}"#;
+    let record = br#"{"temporal_state":"unknown","source_key":" notes/42 ","text":""}"#;
     let (_, same) = stream_run(&store, &["ingest", "--jsonl", "-"], record);
     assert_eq!(same["result"]["summary"]["unchanged"], 1);
     assert_eq!(
@@ -60,7 +67,7 @@ fn public_stream_modes_preserve_identity_defaults_and_file_behavior() {
     let (_, updated) = stream_run(
         &store,
         &["ingest", "--jsonl", "-"],
-        br#"{"source_key":" notes/42 ","text":"","metadata":{"a":1}}"#,
+        br#"{"temporal_state":"unknown","source_key":" notes/42 ","text":"","metadata":{"a":1}}"#,
     );
     assert_eq!(updated["result"]["summary"]["updated"], 1);
     assert_eq!(
@@ -73,7 +80,14 @@ fn public_stream_modes_preserve_identity_defaults_and_file_behavior() {
     );
     let (_, new_key) = stream_run(
         &store,
-        &["ingest", "--stdin", "--source-key", "notes/42"],
+        &[
+            "ingest",
+            "--temporal-state",
+            "unknown",
+            "--stdin",
+            "--source-key",
+            "notes/42",
+        ],
         b"",
     );
     assert_ne!(
@@ -83,12 +97,19 @@ fn public_stream_modes_preserve_identity_defaults_and_file_behavior() {
 
     let file = store.directory.path().join("empty.md");
     std::fs::write(&file, "").unwrap();
-    let file_result = store.success(&["ingest", file.to_str().unwrap()]);
+    let file_result = store.success(&[
+        "ingest",
+        "--temporal-state",
+        "unknown",
+        file.to_str().unwrap(),
+    ]);
     let file_item = &file_result["result"]["items"][0];
     let (_, same_file) = stream_run(
         &store,
         &[
             "ingest",
+            "--temporal-state",
+            "unknown",
             "--stdin",
             "--source-key",
             file_item["source_key"].as_str().unwrap(),
@@ -118,7 +139,7 @@ fn public_stream_modes_preserve_identity_defaults_and_file_behavior() {
 #[test]
 fn public_stream_failures_and_terminal_caps_preserve_prior_successes() {
     let store = Store::new();
-    let records = b"{\"source_key\":\"a\",\"text\":\"\"}\n{bad}\n{\"source_key\":\"a\",\"text\":\"\"}\n{\"source_key\":\"b\",\"text\":\"\"}";
+    let records = b"{\"temporal_state\":\"unknown\",\"source_key\":\"a\",\"text\":\"\"}\n{bad}\n{\"temporal_state\":\"unknown\",\"source_key\":\"a\",\"text\":\"\"}\n{\"temporal_state\":\"unknown\",\"source_key\":\"b\",\"text\":\"\"}";
     let (exit, result) = stream_run(&store, &["ingest", "--jsonl", "-"], records);
     assert_eq!(exit, 2);
     assert_eq!(result["status"], "partial");
@@ -150,12 +171,13 @@ fn public_stream_failures_and_terminal_caps_preserve_prior_successes() {
         capped["result"]["items"][1]["error"]["code"],
         "limit_exceeded"
     );
-    let mut oversized = b"{\"source_key\":\"a\",\"text\":\"\"}\n".to_vec();
+    let mut oversized =
+        b"{\"temporal_state\":\"unknown\",\"source_key\":\"a\",\"text\":\"\"}\n".to_vec();
     oversized.extend(vec![b'x'; 100000]);
-    oversized.extend(b"\n{\"source_key\":\"never\",\"text\":\"\"}");
+    oversized.extend(b"\n{\"temporal_state\":\"unknown\",\"source_key\":\"never\",\"text\":\"\"}");
     let (exit, capped) = stream_run(
         &store,
-        &["ingest", "--jsonl", "-", "--max-json-bytes", "32"],
+        &["ingest", "--jsonl", "-", "--max-json-bytes", "64"],
         &oversized,
     );
     assert_eq!(exit, 2);
@@ -172,6 +194,8 @@ fn public_stream_failures_and_terminal_caps_preserve_prior_successes() {
             &store,
             &[
                 "ingest",
+                "--temporal-state",
+                "unknown",
                 "--stdin",
                 "--source-key",
                 "failed",
@@ -196,10 +220,18 @@ fn stream_options_and_descriptions_validate_without_input_or_store_mutation() {
     let store = Store::new();
     let before = store.files();
     for args in [
-        vec!["ingest", "--stdin"],
-        vec!["ingest", "--source-key", "a"],
+        vec!["ingest", "--temporal-state", "unknown", "--stdin"],
+        vec!["ingest", "--temporal-state", "unknown", "--source-key", "a"],
         vec!["ingest", "--stdin", "--source-key", "a", "--jsonl", "-"],
-        vec!["ingest", "--stdin", "--source-key", "a", "file.txt"],
+        vec![
+            "ingest",
+            "--temporal-state",
+            "unknown",
+            "--stdin",
+            "--source-key",
+            "a",
+            "file.txt",
+        ],
         vec!["ingest", "--jsonl", "-", "--title", "ignored"],
         vec!["ingest", "--jsonl", "-", "--source-type", "file"],
         vec!["ingest", "--jsonl", "-", "--metadata", "{}"],
@@ -210,7 +242,14 @@ fn stream_options_and_descriptions_validate_without_input_or_store_mutation() {
         assert!(output.stdout.is_empty());
     }
     store.failure(
-        &["ingest", "--stdin", "--source-key", ""],
+        &[
+            "ingest",
+            "--temporal-state",
+            "unknown",
+            "--stdin",
+            "--source-key",
+            "",
+        ],
         "invalid_input",
         2,
     );
@@ -228,6 +267,7 @@ fn stream_options_and_descriptions_validate_without_input_or_store_mutation() {
     assert!(!command_validator.is_valid(&example));
     example["stdin"] = json!(false);
     example["source_key"] = Value::Null;
+    example["temporal_state"] = Value::Null;
     assert!(command_validator.is_valid(&example));
     example["source_type"] = json!("file");
     assert!(!command_validator.is_valid(&example));
@@ -250,7 +290,7 @@ fn normalized_stream_pipeline_retains_exact_revisions_and_independent_errors() {
         ..Default::default()
     };
     let text = "\u{feff}Exact\r\n\0e\u{301}\u{1f980}\n";
-    let record = json!({"source_key":"key","text":text,"metadata":{"b":[true,null],"a":1}});
+    let record = json!({"temporal_state":"unknown","source_key":"key","text":text,"metadata":{"b":[true,null],"a":1}});
     let ingest_record = |value: &Value, model: &mut DeterministicModel| {
         let bytes = serde_json::to_vec(value).unwrap();
         ingest::ingest(
@@ -277,11 +317,11 @@ fn normalized_stream_pipeline_retains_exact_revisions_and_independent_errors() {
     assert_eq!(updated.items[0].document_id, added.items[0].document_id);
     assert_ne!(updated.items[0].revision_id, added.items[0].revision_id);
     let bad = [
-        json!({"source_key":"large","text":"x".repeat(129)}),
-        json!({"source_key":"float","text":"","metadata":{"x":1.5}}),
-        json!({"source_key":"time","text":"","occurred_at":"not a timestamp"}),
-        json!({"source_key":"model","text":"MODEL_FAILURE"}),
-        json!({"source_key":"after","text":"After failed records"}),
+        json!({"temporal_state":"unknown","source_key":"large","text":"x".repeat(129)}),
+        json!({"temporal_state":"unknown","source_key":"float","text":"","metadata":{"x":1.5}}),
+        json!({"temporal_state":"unknown","source_key":"time","text":"","occurred_at":"not a timestamp"}),
+        json!({"temporal_state":"unknown","source_key":"model","text":"MODEL_FAILURE"}),
+        json!({"temporal_state":"unknown","source_key":"after","text":"After failed records"}),
     ]
     .iter()
     .map(|v| format!("{v}\n"))
@@ -340,7 +380,9 @@ fn missing_store_never_consumes_lazy_input_and_stream_io_failure_is_terminal() {
     }
     let store = Store::new();
     let reader = FailingReader {
-        bytes: std::io::Cursor::new(b"{\"source_key\":\"a\",\"text\":\"\"}\n".to_vec()),
+        bytes: std::io::Cursor::new(
+            b"{\"temporal_state\":\"unknown\",\"source_key\":\"a\",\"text\":\"\"}\n".to_vec(),
+        ),
     };
     let result = ingest::ingest(
         &store.root,
@@ -409,6 +451,7 @@ fn input(key: &str, text: &str) -> InputItem {
             title: Some("A title".into()),
             source_type: "file".into(),
             occurred_at: None,
+            temporal_state: commonplace::domain::documents::TemporalState::Unknown,
             metadata: serde_json::Map::new(),
         }),
     }
@@ -820,7 +863,10 @@ fn every_metadata_field_revises_and_empty_replacement_clears_only_current_indexe
         match change {
             1 => document.title = None,
             2 => document.source_type = "note".into(),
-            3 => document.occurred_at = Some("2026-09-28T00:00:00Z".into()),
+            3 => {
+                document.temporal_state = commonplace::domain::documents::TemporalState::Dated;
+                document.occurred_at = Some("2026-09-28T00:00:00Z".into());
+            }
             4 => {
                 document.metadata.insert("edition".into(), json!(2));
             }
@@ -866,7 +912,12 @@ fn scan_absence_never_deletes_and_disappeared_inputs_fail_individually() {
     std::fs::create_dir(&notes).unwrap();
     let file = notes.join("a.md");
     std::fs::write(&file, "").unwrap();
-    let added = store.success(&["ingest", notes.to_str().unwrap()]);
+    let added = store.success(&[
+        "ingest",
+        "--temporal-state",
+        "unknown",
+        notes.to_str().unwrap(),
+    ]);
     let doc_id = added["result"]["items"][0]["document_id"].as_str().unwrap();
     let options = commonplace::adapters::sources::FileOptions {
         paths: vec![notes.clone()],
@@ -877,12 +928,23 @@ fn scan_absence_never_deletes_and_disappeared_inputs_fail_individually() {
     let missing = commonplace::adapters::sources::read_file(
         &enumerated[0].path,
         "known-key".into(),
-        &commonplace::adapters::sources::MetadataOverrides::default(),
+        &commonplace::adapters::sources::MetadataOverrides {
+            title: None,
+            source_type: "file".into(),
+            temporal_state: commonplace::domain::documents::TemporalState::Unknown,
+            occurred_at: None,
+            metadata: serde_json::Map::new(),
+        },
         100,
     )
     .unwrap_err();
     assert_eq!(missing.code(), "invalid_input");
-    let scan = store.success(&["ingest", notes.to_str().unwrap()]);
+    let scan = store.success(&[
+        "ingest",
+        "--temporal-state",
+        "unknown",
+        notes.to_str().unwrap(),
+    ]);
     assert_eq!(
         scan["result"]["summary"],
         json!({"added":0,"updated":0,"unchanged":0,"failed":0})
@@ -922,12 +984,21 @@ fn public_binary_file_commands_and_descriptions_need_no_model_for_empty_sources(
     let b = store.directory.path().join("b.txt");
     std::fs::write(&a, "").unwrap();
     std::fs::write(&b, "").unwrap();
-    let added = store.success(&["ingest", a.to_str().unwrap(), b.to_str().unwrap(), "--json"]);
+    let added = store.success(&[
+        "ingest",
+        "--temporal-state",
+        "unknown",
+        a.to_str().unwrap(),
+        b.to_str().unwrap(),
+        "--json",
+    ]);
     assert_eq!(added["result"]["summary"]["added"], 2);
-    let unchanged = store.success(&["ingest", a.to_str().unwrap()]);
+    let unchanged = store.success(&["ingest", "--temporal-state", "unknown", a.to_str().unwrap()]);
     assert_eq!(unchanged["result"]["summary"]["unchanged"], 1);
     let updated = store.success(&[
         "ingest",
+        "--temporal-state",
+        "dated",
         a.to_str().unwrap(),
         "--metadata",
         "{\"k\":2}",
@@ -948,28 +1019,58 @@ fn public_binary_file_commands_and_descriptions_need_no_model_for_empty_sources(
     store.failure(&["get", "revision:9999"], "not_found", 2);
     store.failure(&["get", "entity:1"], "not_found", 2);
     store.failure(
-        &["ingest", a.to_str().unwrap(), "--metadata", "{\"x\":1.5}"],
-        "invalid_input",
-        2,
-    );
-    store.failure(
-        &["ingest", a.to_str().unwrap(), "--occurred-at", "yesterday"],
-        "invalid_input",
-        2,
-    );
-    store.failure(
-        &["ingest", a.to_str().unwrap(), "--max-documents", "0"],
-        "invalid_input",
-        2,
-    );
-    store.failure(
-        &["ingest", a.to_str().unwrap(), "--include", "["],
+        &[
+            "ingest",
+            "--temporal-state",
+            "unknown",
+            a.to_str().unwrap(),
+            "--metadata",
+            "{\"x\":1.5}",
+        ],
         "invalid_input",
         2,
     );
     store.failure(
         &[
             "ingest",
+            "--temporal-state",
+            "dated",
+            a.to_str().unwrap(),
+            "--occurred-at",
+            "yesterday",
+        ],
+        "invalid_input",
+        2,
+    );
+    store.failure(
+        &[
+            "ingest",
+            "--temporal-state",
+            "unknown",
+            a.to_str().unwrap(),
+            "--max-documents",
+            "0",
+        ],
+        "invalid_input",
+        2,
+    );
+    store.failure(
+        &[
+            "ingest",
+            "--temporal-state",
+            "unknown",
+            a.to_str().unwrap(),
+            "--include",
+            "[",
+        ],
+        "invalid_input",
+        2,
+    );
+    store.failure(
+        &[
+            "ingest",
+            "--temporal-state",
+            "unknown",
             a.to_str().unwrap(),
             b.to_str().unwrap(),
             "--max-documents",
@@ -981,6 +1082,8 @@ fn public_binary_file_commands_and_descriptions_need_no_model_for_empty_sources(
     store.failure(
         &[
             "ingest",
+            "--temporal-state",
+            "unknown",
             a.to_str().unwrap(),
             "--metadata",
             "{\"x\":0}",
@@ -1033,6 +1136,8 @@ fn binary_partial_failures_keep_prior_items_and_missing_models_are_explicit() {
         )
         .args([
             "ingest",
+            "--temporal-state",
+            "unknown",
             empty.to_str().unwrap(),
             invalid.to_str().unwrap(),
             text.to_str().unwrap(),

@@ -71,6 +71,11 @@ fn input(key: &str, text: &str, source_type: &str, time: Option<&str>) -> ingest
             text: text.into(),
             title: Some(format!("Title {key}")),
             source_type: source_type.into(),
+            temporal_state: if time.is_some() {
+                commonplace::domain::documents::TemporalState::Dated
+            } else {
+                commonplace::domain::documents::TemporalState::Unknown
+            },
             occurred_at: time.map(str::to_owned),
             metadata: json!({"nested":{"value":"exact"}})
                 .as_object()
@@ -494,7 +499,15 @@ fn overlapping_boundary_evidence_keeps_account_and_decision_and_distinct_results
 fn exact_hydration_and_one_snapshot_survive_current_revision_replacement() {
     let store = Store::new();
     let original = "needle\r\n\r\nExact \0e\u{301}🦀";
-    publish(&store.root, vec![input("source", original, "note", None)]);
+    publish(
+        &store.root,
+        vec![input(
+            "source",
+            original,
+            "note",
+            Some("2026-01-01T00:00:00Z"),
+        )],
+    );
     let root = store.root.clone();
     let mut model = Embedding {
         on_embed: Some(Box::new(move || {
@@ -502,14 +515,34 @@ fn exact_hydration_and_one_snapshot_survive_current_revision_replacement() {
         })),
         ..Default::default()
     };
+    let mut historical_request = request("needle", 10);
+    historical_request.since = Some("2026-01-01T00:00:00Z".into());
     let result = search::search(
         &store.root,
-        &request("needle", 10),
+        &historical_request,
         &mut model,
         &mut Ranker::default(),
     )
     .unwrap();
     assert_eq!(result.items.len(), 1);
+    assert_eq!(
+        result
+            .temporal_filter
+            .as_ref()
+            .unwrap()
+            .coverage
+            .eligible_dated,
+        1
+    );
+    assert_eq!(
+        result
+            .temporal_filter
+            .as_ref()
+            .unwrap()
+            .coverage
+            .excluded_unknown,
+        0
+    );
     let citation = &result.items[0].evidence;
     assert_eq!(citation.text, original);
     let session = SqliteDatabase::read(&store.root).unwrap();

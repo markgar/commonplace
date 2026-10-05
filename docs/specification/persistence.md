@@ -40,7 +40,7 @@ The database contains 15 ordinary tables and two virtual search tables:
 ```sql
 CREATE TABLE store_state (
     singleton         INTEGER PRIMARY KEY CHECK (singleton = 1),
-    format            TEXT NOT NULL CHECK (format = 'commonplace-store/2'),
+    format            TEXT NOT NULL CHECK (format = 'commonplace-store/3'),
     schema_version    INTEGER NOT NULL DEFAULT 0 CHECK (schema_version >= 0),
     knowledge_version INTEGER NOT NULL DEFAULT 0 CHECK (knowledge_version >= 0),
     created_at        TEXT NOT NULL
@@ -51,11 +51,14 @@ Exactly one row exists. `format` identifies the complete durable representation,
 including ordinary DDL, passage generation, lexical configuration, embedding
 identity and dimensions, vector encoding, and the derived graph representation.
 
-`commonplace-store/2` adopts the RDF mapping and Oxigraph directory layout in
-section 13. The former `commonplace-store/1` Grafeo layout is incompatible and
-requires a fresh store. Implementing this replacement changes the SQLite format
-constraint/marker and initialized configuration together; it does not migrate,
-relabel, delete, or automatically rebuild a version-1 store.
+`commonplace-store/3` requires explicit temporal state in revisions, evidence and
+RDF, with the section 14 digest encoding. Store/config markers change together.
+All version-2 stores, including empty stores and stores with only non-null dates,
+are incompatible and rejected before mutation. Use a fresh directory and explicit
+caller-controlled reingestion. No migration, relabelling, old-null inference,
+deletion, or automatic graph repair/conversion is provided. Reingestion does not
+transfer prior citation IDs or authored knowledge. The version-1 Grafeo layout
+also remains incompatible; /3 retains /2's Oxigraph layout.
 
 `schema_version` changes when vocabulary changes. `knowledge_version` changes
 when active graph content or evidence changes.
@@ -79,13 +82,16 @@ CREATE TABLE document_revisions (
     text             TEXT NOT NULL,
     title            TEXT,
     source_type      TEXT NOT NULL CHECK (length(source_type) > 0),
+    temporal_state   TEXT NOT NULL CHECK (temporal_state IN ('dated', 'timeless', 'unknown')),
     occurred_at      TEXT,
     metadata_json    TEXT NOT NULL CHECK (
                          json_valid(metadata_json)
                          AND json_type(metadata_json) = 'object'
                      ),
     created_at       TEXT NOT NULL,
-    UNIQUE (document_id, revision_number)
+    UNIQUE (document_id, revision_number),
+    CHECK ((temporal_state = 'dated' AND occurred_at IS NOT NULL)
+        OR (temporal_state IN ('timeless', 'unknown') AND occurred_at IS NULL))
 ) STRICT;
 
 CREATE TABLE passages (
@@ -114,10 +120,11 @@ exactly the stored passage text.
 
 ### First-ingestion representation
 
-P3 completes the initial source representation under the adopted
-`commonplace-store/2` format; P5a owns the format-marker transition. Previously
-initialized empty stores have no source representation to reinterpret. There is
-no migration or second representation path.
+P3 originally completed source ingestion under /2; the explicit temporal-intent
+follow-on adopts /3 without a migration or second representation path.
+Temporal state is immutable revision metadata and participates in exact matching
+and digests. A temporal-only change creates a new revision of the same document;
+historical evidence retains its cited revision's state and time.
 
 The fixed passage maximum is **1024 UTF-8 bytes, including overlap**. Paragraphs
 end after a blank LF or CRLF line (a line containing only spaces/tabs is blank);
@@ -163,8 +170,9 @@ no gaps, UTF-8 slices, final passage lengths and complete union coverage; the
 generator owns where overlap is introduced. Ordinals start at zero.
 Golden tests pin these boundaries and the existing section 14 digest encoding.
 
-This approved balanced, target-overlapping boundary-generator replacement
-affects only newly prepared revisions under `/2`. Existing persisted passages
+The approved balanced, target-overlapping boundary-generator replacement
+originally shipped for newly prepared revisions under `/2`; `/3` continues that
+generator. Within a compatible store, existing persisted passages
 remain authoritative, including historical rigid or balanced nonoverlapping
 boundaries. An unchanged digest does not cause re-preparation, reindexing, or a
 new revision.
@@ -221,14 +229,22 @@ The implementation verifies:
 Search checks both index ID sets against canonical current passages in its one
 read snapshot, including empty indexes, and rejects incompatible vector
 declarations or missing/extra index rows without repair. Both candidate paths
-apply current-revision, source-type, inclusive source-time, and optional
-passage-only literal phrase predicates before
-their limits. Dense candidates use the stock sqlite-vec `vec_distance_L2` function
+apply current-revision, source-type, and optional passage-only literal phrase
+predicates before their limits. With
+`--since`, their identical temporal predicate admits timeless revisions OR dated
+revisions at/after the inclusive normalized cutoff, excluding unknown and older
+dated revisions. Canonical UTC text comparisons retain nanosecond precision
+without SQLite date rounding. No ingestion timestamp is a substitute.
+One aggregate query over current revisions after source-type filtering counts
+sources in all four coverage categories in the same read snapshot, independent
+of passages, overlap, query, literal phrase constraint, candidates and results,
+including empty text sources.
+Dense candidates use the stock sqlite-vec `vec_distance_L2` function
 inside SQLite over eligible `vec0` rows, with distance/passage-ID ordering.
 This exhaustive native SQL evaluation permits deterministic cutoff ties and
 prefiltering without an application-level vector scan or index-layout change.
 Work scales with the eligible corpus; only bounded candidates leave SQLite.
-The initial retrieval constants in implementation section 4 do not change `/2`.
+The retrieval constants in implementation section 4 are unchanged by /3.
 The phrase constraint uses one shared deterministic SQLite scalar function on
 canonical `passages.text`, with Rust Unicode whole-string lowercase substring
 semantics as specified in product section 5, not SQLite's ASCII-only `lower` or
@@ -305,7 +321,7 @@ format, a negative/out-of-range version, a non-regular final path, or a version
 different from SQLite is invalid freeze state. Commonplace never modifies,
 removes, replaces, or bypasses a final marker.
 
-Marker absence means an existing compatible version-2 store is unfrozen. This
+Marker absence means an existing compatible version-3 store is unfrozen. This
 optional capability requires no SQLite/configuration migration or store-format
 change. The marker duplicates no vocabulary and records no knowledge version or
 timestamp.
@@ -606,7 +622,7 @@ properties are single-valued and required.
 | Fact | `predicate`: predicate link; `object`: entity link or typed literal |
 | Literal fact only | `literal_kind`: predicate object kind; `literal_json`: canonical SQLite literal JSON as a string |
 | Passage | `revision`: revision link; `ordinal`, `start_byte`, `end_byte`, `text`: exact passage fields |
-| Revision | `document`: document link; `revision_number`, `revision_digest`, `source_type`, `metadata_json`: exact revision fields; optional `title` and `occurred_at` |
+| Revision | `document`: document link; `revision_number`, `revision_digest`, `source_type`, `temporal_state`, `metadata_json`: exact revision fields; optional `title` and dated `occurred_at` |
 | Document | `source_key`: canonical source key |
 
 Text, names, IDs, kinds, digests, and canonical JSON fields use `xsd:string`.
@@ -659,7 +675,7 @@ The initialized configuration is:
 
 ```json
 {
-  "format": "commonplace-config/2",
+  "format": "commonplace-config/3",
   "database": "commonplace.sqlite3",
   "graph": "graph/current"
 }
@@ -680,7 +696,7 @@ the derived graph layout and neither is opened by graph workflows.
 
 `init` creates an empty default graph and version-zero metadata with matching
 SQLite/configuration formats. Its JSON response field names remain unchanged;
-its format value becomes `commonplace-store/2`. Version-1 configuration, the old
+its format value is `commonplace-store/3`. Version-1/2 configuration, the old
 `graph/current.grafeo` layout, and unknown markers are rejected before mutation,
 including by `init` and `graph rebuild`. No compatibility backend or migration
 is provided. Further incompatible representation decisions still require a
@@ -724,7 +740,7 @@ rewrite, migrate, repair, or preserve unknown data in this format.
 This file is discovered outside every knowledge base and contains no
 authoritative source, knowledge, graph, credential, profile, or provider state.
 It must never be confused with `<store>/config.json`, whose fixed
-`commonplace-config/2` contents describe the backend layout and are created and
+`commonplace-config/3` contents describe the backend layout and are created and
 validated only with that store. Selecting a user default does not initialize,
 open, validate, migrate, or mutate the referenced store or model cache.
 
@@ -756,10 +772,11 @@ limits, and float rejection.
 `revision_digest` is lowercase SHA-256 over this length-delimited preimage:
 
 ```text
-"commonplace-revision/1\0"
+"commonplace-revision/2\0"
 length(text UTF-8)          || text UTF-8
 presence + length(title)    || title UTF-8 when present
 length(source_type)         || source_type UTF-8
+length(temporal_state)      || temporal_state UTF-8
 presence + length(time)     || normalized occurred_at when present
 length(metadata JSON)       || canonical metadata JSON UTF-8
 ```

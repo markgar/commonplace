@@ -1,6 +1,6 @@
 CREATE TABLE store_state (
     singleton         INTEGER PRIMARY KEY CHECK (singleton = 1),
-    format            TEXT NOT NULL CHECK (format = 'commonplace-store/2'),
+    format            TEXT NOT NULL CHECK (format = 'commonplace-store/3'),
     schema_version    INTEGER NOT NULL DEFAULT 0 CHECK (schema_version >= 0),
     knowledge_version INTEGER NOT NULL DEFAULT 0 CHECK (knowledge_version >= 0),
     created_at        TEXT NOT NULL
@@ -22,13 +22,16 @@ CREATE TABLE document_revisions (
     text             TEXT NOT NULL,
     title            TEXT,
     source_type      TEXT NOT NULL CHECK (length(source_type) > 0),
+    temporal_state   TEXT NOT NULL CHECK (temporal_state IN ('dated', 'timeless', 'unknown')),
     occurred_at      TEXT,
     metadata_json    TEXT NOT NULL CHECK (
                          json_valid(metadata_json)
                          AND json_type(metadata_json) = 'object'
                      ),
     created_at       TEXT NOT NULL,
-    UNIQUE (document_id, revision_number)
+    UNIQUE (document_id, revision_number),
+    CHECK ((temporal_state = 'dated' AND occurred_at IS NOT NULL)
+        OR (temporal_state IN ('timeless', 'unknown') AND occurred_at IS NULL))
 ) STRICT;
 
 CREATE TABLE passages (

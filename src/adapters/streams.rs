@@ -8,11 +8,12 @@ use serde_json::{Map, Value};
 
 use super::sources::{MetadataOverrides, read_utf8};
 use crate::app::ingest::InputItem;
-use crate::domain::documents::DocumentInput;
+use crate::domain::documents::{DocumentInput, TemporalState};
 use crate::{CommonplaceError, Result};
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(transform = temporal_fields)]
 pub struct Record {
     #[schemars(length(min = 1), regex(pattern = "^[^\\u0000]+$"))]
     pub source_key: String,
@@ -21,9 +22,19 @@ pub struct Record {
     #[serde(default = "text_source_type")]
     #[schemars(length(min = 1), regex(pattern = "^[^\\u0000]+$"))]
     pub source_type: String,
+    pub temporal_state: TemporalState,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub occurred_at: Option<String>,
     #[serde(default)]
     pub metadata: Map<String, Value>,
+}
+
+fn temporal_fields(schema: &mut schemars::Schema) {
+    schema.insert("allOf".into(), serde_json::json!([{
+        "if": {"properties": {"temporal_state": {"const": "dated"}}},
+        "then": {"required": ["occurred_at"], "properties": {"occurred_at": {"type": "string", "format": "date-time"}}},
+        "else": {"not": {"required": ["occurred_at"]}}
+    }]));
 }
 
 fn text_source_type() -> String {
@@ -37,6 +48,7 @@ impl From<Record> for DocumentInput {
             text: record.text,
             title: record.title,
             source_type: record.source_type,
+            temporal_state: record.temporal_state,
             occurred_at: record.occurred_at,
             metadata: record.metadata,
         }
@@ -57,6 +69,7 @@ pub fn stdin_item(
             text,
             title: metadata.title.clone(),
             source_type: metadata.source_type.clone(),
+            temporal_state: metadata.temporal_state,
             occurred_at: metadata.occurred_at.clone(),
             metadata: metadata.metadata.clone(),
         }),
@@ -141,7 +154,9 @@ pub fn parse_record(bytes: &[u8]) -> Result<Record> {
     let validator = jsonschema::validator_for(schema.as_value()).map_err(|error| {
         CommonplaceError::Storage(format!("invalid generated record schema: {error}"))
     })?;
-    validator.validate(&value).map_err(invalid)?;
+    validator.validate(&value).map_err(|error| {
+        invalid(format!("{error}; each record requires temporal_state: dated with RFC3339 occurred_at, or timeless/unknown with occurred_at omitted"))
+    })?;
     serde_json::from_value(value).map_err(invalid)
 }
 
@@ -271,7 +286,7 @@ mod tests {
     use super::*;
     use std::io::Cursor;
 
-    const RECORD: &[u8] = br#"{"source_key":"a","text":""}"#;
+    const RECORD: &[u8] = br#"{"source_key":"a","text":"","temporal_state":"unknown"}"#;
 
     #[test]
     fn physical_line_limits_are_inclusive_with_exact_delimiters() {
@@ -355,20 +370,20 @@ mod tests {
 
     #[test]
     fn strict_records_preserve_decoded_text_and_reject_duplicate_fields_at_any_depth() {
-        let record = parse_record(br#"{"source_key":" A ","text":"\uFEFFa\r\n\u0000e\u0301\uD83E\uDD80","metadata":{"a":[null,true,1]}}"#).unwrap();
+        let record = parse_record(br#"{"source_key":" A ","text":"\uFEFFa\r\n\u0000e\u0301\uD83E\uDD80","temporal_state":"unknown","metadata":{"a":[null,true,1]}}"#).unwrap();
         let document = DocumentInput::from(record).normalize().unwrap();
         assert_eq!(document.source_key, " A ");
         assert_eq!(document.text, "\u{feff}a\r\n\0e\u{301}\u{1f980}");
         assert_eq!(document.source_type, "text");
         for bytes in [
-            br#"{"source_key":"a","text":"","extra":1}"#.as_slice(),
-            br#"{"source_key":"a","source_key":"b","text":""}"#,
-            br#"{"source_key":"a","text":"","metadata":{"x":1,"x":2}}"#,
-            br#"{"source_key":"a","text":"","metadata":{"x":[{"a":1,"a":2}]}}"#,
-            br#"{"source_key":"","text":""}"#,
-            br#"{"source_key":"a\u0000","text":""}"#,
-            br#"{"source_key":"a","text":"","source_type":null}"#,
-            br#"{"source_key":"a","text":"","metadata":null}"#,
+            br#"{"source_key":"a","text":"","temporal_state":"unknown","extra":1}"#.as_slice(),
+            br#"{"source_key":"a","source_key":"b","text":"","temporal_state":"unknown"}"#,
+            br#"{"source_key":"a","text":"","temporal_state":"unknown","metadata":{"x":1,"x":2}}"#,
+            br#"{"source_key":"a","text":"","temporal_state":"unknown","metadata":{"x":[{"a":1,"a":2}]}}"#,
+            br#"{"source_key":"","text":"","temporal_state":"unknown"}"#,
+            br#"{"source_key":"a\u0000","text":"","temporal_state":"unknown"}"#,
+            br#"{"source_key":"a","text":"","temporal_state":"unknown","source_type":null}"#,
+            br#"{"source_key":"a","text":"","temporal_state":"unknown","metadata":null}"#,
             b"\xff",
         ] {
             assert_eq!(
@@ -383,7 +398,10 @@ mod tests {
     fn raw_stdin_reads_only_source_limit_plus_one() {
         let metadata = MetadataOverrides {
             source_type: "text".into(),
-            ..Default::default()
+            temporal_state: TemporalState::Unknown,
+            title: None,
+            occurred_at: None,
+            metadata: Map::new(),
         };
         let mut cursor = Cursor::new(vec![b'x'; 1000]);
         let item = stdin_item(&mut cursor, "key".into(), &metadata, 10);
