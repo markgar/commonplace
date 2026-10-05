@@ -65,7 +65,7 @@ enum Command {
         /// JSON document scope from graph query --document-scope; use - for stdin.
         #[arg(long, conflicts_with = "describe_scope")]
         scope: Option<PathBuf>,
-        /// Group retained passages by source with bounded exact excerpts; limit still counts passages.
+        /// Group retained passages by source with full exact text; limit still counts passages.
         #[arg(long, conflicts_with = "describe_scope")]
         grouped: bool,
         /// Literal contiguous passage phrase; Unicode lowercase matching, no normalization.

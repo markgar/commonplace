@@ -184,6 +184,14 @@ fn both_real_candidate_paths_contribute_deduplicate_and_rerank_with_bounds() {
         reranked.items[0].evidence.passage_id,
         result.items[0].evidence.passage_id
     );
+    let mut scoped = request;
+    scoped.scope = Some(commonplace::domain::search::DocumentScope {
+        document_ids: (1..=65).map(|id| format!("doc:{id}")).collect(),
+        truncated: false,
+    });
+    let scope = execute(&store, &scoped).scope.unwrap();
+    assert!(!scope.lexical_truncated);
+    assert!(scope.vector_truncated && scope.fusion_truncated && scope.result_truncated);
 }
 
 #[test]
@@ -519,6 +527,11 @@ fn exact_hydration_and_one_snapshot_survive_current_revision_replacement() {
     };
     let mut historical_request = request("needle", 10);
     historical_request.since = Some("2026-01-01T00:00:00Z".into());
+    historical_request.until = Some("2026-01-01T00:00:00Z".into());
+    historical_request.scope = Some(commonplace::domain::search::DocumentScope {
+        document_ids: vec!["doc:1".into()],
+        truncated: false,
+    });
     let result = search::search(
         &store.root,
         &historical_request,
@@ -527,6 +540,8 @@ fn exact_hydration_and_one_snapshot_survive_current_revision_replacement() {
     )
     .unwrap();
     assert_eq!(result.items.len(), 1);
+    let scope = result.scope.as_ref().unwrap();
+    assert_eq!((scope.eligible_sources, scope.eligible_passages), (1, 1));
     assert_eq!(
         result
             .temporal_filter

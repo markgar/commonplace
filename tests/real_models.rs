@@ -129,6 +129,14 @@ fn real_model_scoped_discovery_offline() {
         "--grouped",
     ]);
     assert_eq!(grouped["result"]["groups"].as_array().unwrap().len(), 2);
+    for group in grouped["result"]["groups"].as_array().unwrap() {
+        for passage in group["passages"].as_array().unwrap() {
+            assert_eq!(
+                passage["text"],
+                execute(&["get", passage["passage_id"].as_str().unwrap()])["result"]["text"]
+            );
+        }
+    }
     assert_eq!(
         grouped["result"]["temporal_filter"]["coverage"],
         json!({"eligible_dated":1,"timeless":1,"older_dated":0,"newer_dated":0,"excluded_unknown":0})

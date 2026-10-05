@@ -308,6 +308,8 @@ fn scope_missing_empty_duplicates_bounds_and_cli_bridge_failures_are_explicit() 
         truncated: false,
     });
     assert_eq!(request.validate().unwrap_err().code(), "limit_exceeded");
+    request.scope.as_mut().unwrap().document_ids.pop();
+    assert_eq!(request.validate().unwrap().document_ids.unwrap().len(), 1);
     let describe = store.success(&["search", "--describe-scope"]);
     assert!(jsonschema::is_valid(
         &describe["result"]["input_schema"],
@@ -352,6 +354,30 @@ fn scope_missing_empty_duplicates_bounds_and_cli_bridge_failures_are_explicit() 
         "model_unavailable",
         1,
     );
+    let base = r#"{"document_ids":[],"truncated":false}"#;
+    for (size, code, exit) in [
+        (65536, "model_unavailable", 1),
+        (65537, "limit_exceeded", 2),
+    ] {
+        std::fs::write(&path, format!("{base}{}", " ".repeat(size - base.len()))).unwrap();
+        store.failure(
+            &[
+                "--model-cache",
+                store
+                    .directory
+                    .path()
+                    .join("missing-models")
+                    .to_str()
+                    .unwrap(),
+                "search",
+                "q",
+                "--scope",
+                path.to_str().unwrap(),
+            ],
+            code,
+            exit,
+        );
+    }
     for query in [
         "SELECT ?d WHERE {VALUES ?d {<urn:commonplace:revision:1>}}",
         "SELECT ?d WHERE {VALUES ?d {<urn:commonplace:doc:01>}}",
@@ -436,6 +462,23 @@ fn until_windows_prefilter_candidates_preserve_precision_states_and_scoped_cover
     publish(&store, inputs);
     let mut request = request();
     request.until = Some("2026-09-30T19:00:00.000000001-05:00".into());
+    let db = SqliteDatabase::read(&store.root).unwrap();
+    let filters = request.validate().unwrap();
+    for candidates in [
+        queries::lexical(db.connection(), &request.lexical_query(), &filters).unwrap(),
+        queries::vector(db.connection(), &vector(0), &filters).unwrap(),
+    ] {
+        assert_eq!(
+            candidates
+                .ids
+                .iter()
+                .map(|id| id.value())
+                .collect::<Vec<_>>(),
+            [71, 72, 73]
+        );
+        assert!(!candidates.truncated);
+    }
+    drop(db);
     let result = execute(&store, &request);
     assert_eq!(result.items.len(), 3);
     let temporal = result.temporal_filter.unwrap();
@@ -585,7 +628,7 @@ fn entity_discovery_resolution_active_types_paging_and_missing_identifiers_are_r
 }
 
 #[test]
-fn compact_groups_keep_independent_exact_passage_spans_and_unicode_excerpt_limits() {
+fn compact_groups_keep_full_exact_passages_spans_and_global_ranks() {
     let store = Store::new();
     let text = format!(
         "selected modernization risk {}\n\n{}",
@@ -615,6 +658,12 @@ fn compact_groups_keep_independent_exact_passage_spans_and_unicode_excerpt_limit
         .collect::<Vec<_>>();
     let grouped = result.grouped();
     assert_eq!(grouped.groups.len(), 2);
+    assert!(
+        grouped
+            .groups
+            .windows(2)
+            .all(|groups| { groups[0].passages[0].rank < groups[1].passages[0].rank })
+    );
     let mut found = vec![];
     let db = SqliteDatabase::read(&store.root).unwrap();
     for group in &grouped.groups {
@@ -628,16 +677,9 @@ fn compact_groups_keep_independent_exact_passage_spans_and_unicode_excerpt_limit
                 (excerpt.start_byte, excerpt.end_byte),
                 (exact.start_byte, exact.end_byte)
             );
-            assert!(excerpt.text.chars().count() <= 600);
-            assert!(exact.text.starts_with(&excerpt.text));
-            assert_eq!(
-                excerpt.excerpt_end_byte,
-                excerpt.start_byte + excerpt.text.len()
-            );
-            assert_eq!(
-                excerpt.excerpt_truncated,
-                excerpt.text.len() < exact.text.len()
-            );
+            assert_eq!(excerpt.text, exact.text);
+            assert!(excerpt.text.len() <= commonplace::domain::passages::PASSAGE_TARGET_BYTES);
+            assert_eq!(excerpt.text.len(), excerpt.end_byte - excerpt.start_byte);
             found.push((excerpt.rank, excerpt.passage_id));
         }
     }
@@ -651,7 +693,17 @@ fn compact_groups_keep_independent_exact_passage_spans_and_unicode_excerpt_limit
             .groups
             .iter()
             .flat_map(|group| &group.passages)
-            .any(|excerpt| excerpt.excerpt_truncated)
+            .any(|passage| passage.text.chars().count() > 600)
+    );
+    request.limit = 2;
+    assert_eq!(
+        execute(&store, &request)
+            .grouped()
+            .groups
+            .iter()
+            .map(|group| group.passages.len())
+            .sum::<usize>(),
+        2
     );
     request.limit = 0;
     assert!(execute(&store, &request).grouped().groups.is_empty());

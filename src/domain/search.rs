@@ -271,18 +271,16 @@ pub struct SourceGroup {
     pub source_type: String,
     pub temporal_state: super::documents::TemporalState,
     pub occurred_at: Option<String>,
-    pub passages: Vec<Excerpt>,
+    pub passages: Vec<GroupedPassage>,
 }
 
 #[derive(Debug, Serialize)]
-pub struct Excerpt {
+pub struct GroupedPassage {
     pub passage_id: PassageId,
     pub rank: usize,
     pub start_byte: usize,
     pub end_byte: usize,
-    pub excerpt_end_byte: usize,
     pub text: String,
-    pub excerpt_truncated: bool,
 }
 
 impl SearchResult {
@@ -290,25 +288,18 @@ impl SearchResult {
         let mut groups: Vec<SourceGroup> = Vec::new();
         for item in self.items {
             let evidence = item.evidence;
-            let end = evidence
-                .text
-                .char_indices()
-                .nth(600)
-                .map_or(evidence.text.len(), |(offset, _)| offset);
-            let excerpt = Excerpt {
+            let passage = GroupedPassage {
                 passage_id: evidence.passage_id,
                 rank: item.rank,
                 start_byte: evidence.start_byte,
                 end_byte: evidence.end_byte,
-                excerpt_end_byte: evidence.start_byte + end,
-                text: evidence.text[..end].into(),
-                excerpt_truncated: end < evidence.text.len(),
+                text: evidence.text,
             };
             if let Some(group) = groups
                 .iter_mut()
                 .find(|group| group.document_id == evidence.document_id)
             {
-                group.passages.push(excerpt);
+                group.passages.push(passage);
             } else {
                 groups.push(SourceGroup {
                     document_id: evidence.document_id,
@@ -318,7 +309,7 @@ impl SearchResult {
                     source_type: evidence.source_type,
                     temporal_state: evidence.temporal_state,
                     occurred_at: evidence.occurred_at,
-                    passages: vec![excerpt],
+                    passages: vec![passage],
                 });
             }
         }

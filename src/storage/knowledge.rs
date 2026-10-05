@@ -215,16 +215,7 @@ pub fn list_entities(
     limit: usize,
 ) -> Result<Vec<EntityId>> {
     let type_id = entity_type
-        .map(|name| {
-            db.query_row(
-                "SELECT entity_type_id FROM entity_types WHERE name=?1",
-                [name],
-                |row| row.get::<_, i64>(0),
-            )
-            .optional()
-            .map_err(storage_error)?
-            .ok_or_else(|| CommonplaceError::InvalidInput(format!("unknown entity type {name:?}")))
-        })
+        .map(|name| entity_type_id(db, name))
         .transpose()?;
     let scheme = missing_identifier
         .map(|name| scheme_id(db, name))
@@ -251,6 +242,17 @@ pub fn list_entities(
         .collect()
 }
 
+fn entity_type_id(db: &Connection, name: &str) -> Result<i64> {
+    db.query_row(
+        "SELECT entity_type_id FROM entity_types WHERE name=?1",
+        [name],
+        |row| row.get::<_, i64>(0),
+    )
+    .optional()
+    .map_err(storage_error)?
+    .ok_or_else(|| CommonplaceError::InvalidInput(format!("unknown entity type {name:?}")))
+}
+
 pub fn membership(
     db: &Connection,
     entity: EntityId,
@@ -260,17 +262,7 @@ pub fn membership(
     created_by: Option<&str>,
     schema_version: i64,
 ) -> Result<Knowledge> {
-    let type_id = db
-        .query_row(
-            "SELECT entity_type_id FROM entity_types WHERE name=?1",
-            [entity_type],
-            |row| row.get::<_, i64>(0),
-        )
-        .optional()
-        .map_err(storage_error)?
-        .ok_or_else(|| {
-            CommonplaceError::InvalidInput(format!("unknown entity type {entity_type:?}"))
-        })?;
+    let type_id = entity_type_id(db, entity_type)?;
     let hydrated = hydrate_support(db, support)?;
     db.execute(
         "INSERT INTO knowledge_items(kind,schema_version,created_at,created_by)
