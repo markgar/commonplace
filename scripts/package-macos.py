@@ -89,7 +89,7 @@ def main():
     build_log = dist / f"{name}.build.log"
     require(not build_log.exists(), f"refusing to overwrite {build_log}")
     command = SANDBOX + ["cargo", "build", "--release", "--bin", "commonplace",
-                         "--locked", "--offline", "-j1"]
+                         "--locked", "--offline"]
     print(f"Building {commit}; log: {build_log}", flush=True)
     with build_log.open("x") as log:
         subprocess.run(command, cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT, check=True)

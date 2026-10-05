@@ -23,8 +23,9 @@ export COMMONPLACE_MODEL_CACHE=/absolute/path/to/prepared/pinned-models
 python3 scripts/package-macos.py
 ```
 
-The helper builds the real application with `--release --locked --offline -j1`
-under network denial. It checks the pinned native ONNX Runtime cache before
+The helper builds the real application with `--release --locked --offline`
+under network denial, using Cargo's default parallelism based on available CPUs.
+It checks the pinned native ONNX Runtime cache before
 building. Missing Rust/native/model caches are blockers, not permission to fetch
 from alternate sources. The build environment deliberately excludes native
 library/provider overrides and uses the repository's default selected stack.
