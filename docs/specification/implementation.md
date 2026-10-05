@@ -373,6 +373,42 @@ never with lexical-only success. Verify the relevance fixture with the pinned
 real models through P2/P3's explicit test invocation, as well as deterministic
 pipeline tests; attach the real-model result to this packet's acceptance.
 
+### 3.7a P3/P4 search-quality follow-on
+
+**Packet:** [Search quality follow-on #51](https://github.com/markgar/commonplace/issues/51).
+Depends on integrated P3 and P4; their completed packets are not reopened.
+
+**Outcome/work:** replace oversized-paragraph rigid windows with balanced,
+word-aware UTF-8-safe chunks with target overlap: 102 bytes (10% of maximum
+passage size), for newly created revisions only, following
+persistence section 5. Add optional single `search --must-contain '<phrase>'`,
+with product section 5's passage-only literal Unicode lowercase semantics and
+input bounds, before both SQLite candidate limits. Preserve normal search,
+exact immutable citations, existing identity/digests, and persisted historical
+passages. Update the owning specifications and README with these approved choices.
+
+**Acceptance:** pin `[0,601)` / `[499,1100)` splitting for a whitespace-free
+1100-byte ASCII paragraph: 601/601 bytes with 102 repeated bytes. Verify nearby
+word boundaries, UTF-8 fallback, the documented conservative context-reserving
+count, ceiling including overlap, determinism, exact repeated byte intersections,
+complete union coverage with no gaps, strictly advancing offsets, no tiny tails,
+unchanged ordinary packing, and passage limits. Short sources remain valid;
+an unchanged historical rigid-window revision is not rebuilt, while a changed
+revision uses balanced overlapping boundaries and old citations remain exact.
+Cover historical rigid and balanced nonoverlapping revisions. A boundary-spanning
+account/decision example must retrieve complete exact evidence. Adjacent
+overlapping passage IDs remain distinct results under existing fusion,
+ranking and truncation; no content-level deduplication contract is added.
+Real SQLite tests must show both retrieval paths find matching passages beyond more than
+64 otherwise eligible distractors, exclude title/metadata/other-passage-only
+matches, and preserve literal whitespace/punctuation and documented Unicode
+semantics. Cover validation, common CLI errors, empty/zero-limit behavior and
+unchanged no-flag behavior. Use isolated local output and README checks plus
+the required independent plan and implementation reviews.
+
+Temporal semantics, importer changes, date extraction/backfill, aliases,
+migrations, new providers, platform packaging, and merge are excluded.
+
 ### 3.8 Graph commands and cited authoring
 
 #### P5a: graph runtime, queries, and rebuild
@@ -653,6 +689,10 @@ independent review gates, not platform packaging or Actions.
 new providers/dependencies/frameworks or query-debug system. Sibling search-quality
 work owns passage preparation and must-contain; combined integration must preserve
 its shared candidate predicate without duplicating its implementation here.
+Combined acceptance exercises oversized overlapping account/decision passages
+with `--must-contain` and `--since` together, more than 64 excluded sources in
+both candidate paths, phrase/overlap-independent current-source coverage, and
+unchanged historical exact citations/support/RDF after temporal-only replacement.
 
 ### 3.15 Packet delivery and integration rules
 

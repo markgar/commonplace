@@ -141,13 +141,20 @@ pub fn publish(
     })?;
     validate_vectors(&prepared.vectors, prepared.ranges.len())?;
     let mut end = 0;
+    let mut previous_start = None;
     for (ordinal, range) in prepared.ranges.iter().enumerate() {
-        if range.ordinal != ordinal || range.start_byte != end || range.end_byte <= end {
+        if range.ordinal != ordinal
+            || range.start_byte > end
+            || previous_start.is_some_and(|start| range.start_byte <= start)
+            || range.end_byte <= end
+            || range.end_byte - range.start_byte > crate::domain::passages::PASSAGE_TARGET_BYTES
+        {
             return Err(CommonplaceError::InvalidInput(
-                "passages must cover the source without gaps or overlap".into(),
+                "passages must cover the source without gaps, advance both offsets, and fit 1024 bytes including overlap".into(),
             ));
         }
         range.text(&input.text)?;
+        previous_start = Some(range.start_byte);
         end = range.end_byte;
     }
     if end != input.text.len() {

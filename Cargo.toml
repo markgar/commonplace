@@ -17,7 +17,7 @@ fastembed = { version = "=7.1.0", default-features = false, features = ["ort-dow
 globset = "0.4"
 hf-hub = { version = "=0.5.0", default-features = false, features = ["ureq"] }
 jsonschema = { version = "0.33", default-features = false }
-rusqlite = { version = "0.37", features = ["bundled"] }
+rusqlite = { version = "0.37", features = ["bundled", "functions"] }
 schemars = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

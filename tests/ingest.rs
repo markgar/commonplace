@@ -514,6 +514,128 @@ fn graph_files(store: &Store) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
 }
 
 #[test]
+fn balanced_preparation_does_not_rewrite_persisted_historical_boundaries() {
+    for historical_boundary in [1024, 550] {
+        let store = Store::new();
+        let text = "a".repeat(1100);
+        let mut model = DeterministicModel::default();
+        let first = run(&store, vec![input("historical", &text)], &mut model);
+        let ids = &first.items[0].passage_ids;
+        assert_eq!(ids.len(), 2);
+        // Seed prior rigid or balanced nonoverlapping boundaries without changing the digest.
+        let mut writer = SqliteDatabase::write(&store.root, std::time::Duration::ZERO).unwrap();
+        let tx = writer.transaction().unwrap();
+        for (id, start, end) in [
+            (ids[0], 0, historical_boundary),
+            (ids[1], historical_boundary, 1100),
+        ] {
+            tx.execute(
+                "UPDATE passages SET start_byte=?2,end_byte=?3,text=?4 WHERE passage_id=?1",
+                rusqlite::params![id.value(), start, end, &text[start..end]],
+            )
+            .unwrap();
+            tx.execute("DELETE FROM passage_fts WHERE rowid=?1", [id.value()])
+                .unwrap();
+            tx.execute(
+                "INSERT INTO passage_fts(rowid,text) VALUES (?1,?2)",
+                rusqlite::params![id.value(), &text[start..end]],
+            )
+            .unwrap();
+        }
+        tx.commit().unwrap();
+        drop(writer);
+        let old: Vec<_> = ids
+            .iter()
+            .map(|id| store.success(&["get", &id.to_string()]))
+            .collect();
+        let calls = model.calls.len();
+        let repeated = run(&store, vec![input("historical", &text)], &mut model);
+        assert_eq!(repeated.summary.unchanged, 1);
+        assert_eq!(repeated.items[0].revision_id, first.items[0].revision_id);
+        assert_eq!(repeated.items[0].passage_ids, *ids);
+        assert_eq!(model.calls.len(), calls);
+        let mut changed = input("historical", &text);
+        changed
+            .document
+            .as_mut()
+            .unwrap()
+            .metadata
+            .insert("edition".into(), json!(2));
+        let updated = run(&store, vec![changed], &mut model);
+        assert_eq!(updated.summary.updated, 1);
+        assert_ne!(updated.items[0].revision_id, first.items[0].revision_id);
+        for (index, id) in updated.items[0].passage_ids.iter().enumerate() {
+            let result = store.success(&["get", &id.to_string()]);
+            let (start, end) = [(0, 601), (499, 1100)][index];
+            assert_eq!(result["result"]["start_byte"], start);
+            assert_eq!(result["result"]["end_byte"], end);
+            assert_eq!(result["result"]["text"], &text[start..end]);
+        }
+        for (id, original) in ids.iter().zip(old) {
+            assert_eq!(store.success(&["get", &id.to_string()]), original);
+        }
+        assert_indexes(&store);
+    }
+}
+
+#[test]
+fn publication_rejects_gaps_nonadvancing_ranges_and_oversized_overlap_windows() {
+    use commonplace::domain::passages::PassageRange;
+    use commonplace::storage::documents::{PreparedDocument, publish};
+
+    let store = Store::new();
+    let text = format!("🦀{}", "a".repeat(1096));
+    let document = input("ranges", &text).document.unwrap();
+    let mut writer = SqliteDatabase::write(&store.root, std::time::Duration::ZERO).unwrap();
+    let tx = writer.transaction().unwrap();
+    for offsets in [
+        vec![],
+        vec![(1, 601), (499, 1100)],
+        vec![(0, 601), (602, 1100)],
+        vec![(0, 601), (0, 1100)],
+        vec![(0, 601), (499, 600)],
+        vec![(0, 601), (499, 700), (498, 1100)],
+        vec![(0, 1), (0, 1100)],
+        vec![(0, 1100)],
+        vec![(0, 601), (499, 1099)],
+    ] {
+        let ranges: Vec<_> = offsets
+            .into_iter()
+            .enumerate()
+            .map(|(ordinal, (start_byte, end_byte))| PassageRange {
+                ordinal,
+                start_byte,
+                end_byte,
+            })
+            .collect();
+        let mut vector = vec![0.0; EMBEDDING_DIMENSIONS];
+        vector[0] = 1.0;
+        let prepared = PreparedDocument {
+            vectors: vec![vector; ranges.len()],
+            ranges,
+        };
+        assert_eq!(
+            publish(
+                &tx,
+                &document,
+                None,
+                Some(&prepared),
+                "2026-10-05T00:00:00Z"
+            )
+            .unwrap_err()
+            .code(),
+            "invalid_input"
+        );
+        assert_eq!(
+            tx.query_row("SELECT count(*) FROM documents", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
+}
+
+#[test]
 fn complete_pipeline_retains_exact_revisions_and_current_indexes() {
     let store = Store::new();
     let graph = graph_files(&store);

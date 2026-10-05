@@ -72,6 +72,7 @@ fn publish(store: &Store, documents: Vec<DocumentInput>) -> ingest::IngestResult
 fn request(since: Option<&str>, types: &[&str], limit: usize) -> SearchRequest {
     SearchRequest {
         query: "needle".into(),
+        must_contain: None,
         since: since.map(str::to_owned),
         source_types: types.iter().map(|value| (*value).into()).collect(),
         limit,
@@ -483,6 +484,221 @@ fn since_filters_both_paths_before_limits_and_counts_current_sources_not_matches
             .unwrap()
             .len(),
         1
+    );
+}
+
+#[test]
+fn combined_phrase_since_overlap_filters_keep_source_coverage_and_historical_citations() {
+    use TemporalState::{Dated, Timeless, Unknown};
+    let store = Store::new();
+    let cutoff = "2026-09-20T19:00:00.000000001-05:00";
+    let normalized_cutoff = "2026-09-21T00:00:00.000000001Z";
+    let phrase = "ACME Corp approved budget";
+    let mut text = format!("{} {phrase}. ", "x".repeat(535));
+    text.push_str(&"y".repeat(1100 - text.len()));
+    assert!(!text[..550].contains(phrase));
+    assert!(!text[550..].contains(phrase));
+
+    let mut documents = Vec::new();
+    for index in 0..70 {
+        documents.extend([
+            document(
+                &format!("older-{index}"),
+                phrase,
+                Dated,
+                Some("2026-09-21T00:00:00Z"),
+                "note",
+            ),
+            document(&format!("unknown-{index}"), phrase, Unknown, None, "note"),
+            document(
+                &format!("no-account-{index}"),
+                "approved budget",
+                Dated,
+                Some(normalized_cutoff),
+                "note",
+            ),
+            document(&format!("other-{index}"), phrase, Timeless, None, "other"),
+        ]);
+    }
+    documents.extend([
+        document("recent", &text, Dated, Some(normalized_cutoff), "note"),
+        document("background", &text, Timeless, None, "note"),
+        document("empty", "", Timeless, None, "note"),
+        document(
+            "unmatched-context",
+            "unrelated context",
+            Timeless,
+            None,
+            "note",
+        ),
+        document(
+            "older-overlap",
+            &text,
+            Dated,
+            Some("2026-09-21T00:00:00Z"),
+            "note",
+        ),
+        document("unknown-overlap", &text, Unknown, None, "note"),
+        document("revised-type", &text, Unknown, None, "note"),
+    ]);
+    let added = publish(&store, documents);
+    assert_eq!(added.summary.failed, 0);
+    let changed_type = publish(
+        &store,
+        vec![document("revised-type", &text, Timeless, None, "other")],
+    );
+    assert_eq!(changed_type.summary.updated, 1);
+    let coverage = json!({
+        "eligible_dated":71, "timeless":3, "older_dated":71, "excluded_unknown":71
+    });
+    let mut selected = request(Some(cutoff), &["note", "note"], 50);
+    selected.query = "approved budget".into();
+    selected.must_contain = Some("acme CORP".into());
+
+    let session = SqliteDatabase::read(&store.root).unwrap();
+    let filters = selected.validate().unwrap();
+    assert_eq!(
+        serde_json::to_value(queries::temporal_coverage(session.connection(), &filters).unwrap())
+            .unwrap(),
+        coverage
+    );
+    for candidates in [
+        queries::lexical(session.connection(), &selected.lexical_query(), &filters).unwrap(),
+        queries::vector(session.connection(), &vector(), &filters).unwrap(),
+    ] {
+        assert!(!candidates.truncated);
+        let mut keys = candidates
+            .ids
+            .into_iter()
+            .map(|id| {
+                evidence::passage(session.connection(), id)
+                    .unwrap()
+                    .source_key
+            })
+            .collect::<Vec<_>>();
+        keys.sort();
+        assert_eq!(keys, ["background", "background", "recent", "recent"]);
+    }
+    drop(session);
+    let result = search::search(&store.root, &selected, &mut Model, &mut Model).unwrap();
+    assert_eq!(result.items.len(), 4);
+    assert!(!result.truncated);
+    let temporal = result.temporal_filter.as_ref().unwrap();
+    assert_eq!(temporal.since, normalized_cutoff);
+    assert!(temporal.includes_timeless);
+    assert_eq!(serde_json::to_value(&temporal.coverage).unwrap(), coverage);
+    assert_eq!(temporal.diagnostics[0].code, "unknown_dates_excluded");
+    for key in ["recent", "background"] {
+        let mut passages = result
+            .items
+            .iter()
+            .filter(|item| item.evidence.source_key == key)
+            .map(|item| &item.evidence)
+            .collect::<Vec<_>>();
+        passages.sort_by_key(|passage| passage.ordinal);
+        assert_eq!(passages.len(), 2);
+        assert_ne!(passages[0].passage_id, passages[1].passage_id);
+        assert_eq!(passages[0].start_byte, 0);
+        assert_eq!(passages[1].end_byte, text.len());
+        assert_eq!(passages[0].end_byte - passages[1].start_byte, 102);
+        assert!(passages[1].start_byte > passages[0].start_byte);
+        assert!(passages[1].end_byte > passages[0].end_byte);
+        for passage in passages {
+            assert!(passage.text.contains(phrase));
+            assert_eq!(passage.text, text[passage.start_byte..passage.end_byte]);
+            assert!(passage.text.len() <= 1024);
+        }
+    }
+    for limit in [0, 1, 50] {
+        selected.limit = limit;
+        let result = search(&store, &selected);
+        assert_eq!(result["temporal_filter"]["coverage"], coverage);
+        assert_eq!(result["items"].as_array().unwrap().len(), limit.min(4));
+        assert_eq!(result["truncated"], limit < 4);
+    }
+    selected.must_contain = Some("absent phrase".into());
+    let empty = search(&store, &selected);
+    assert_eq!(empty["items"], json!([]));
+    assert_eq!(empty["truncated"], false);
+    assert_eq!(empty["temporal_filter"]["coverage"], coverage);
+    assert_eq!(
+        empty["temporal_filter"]["diagnostics"][0]["code"],
+        "unknown_dates_excluded"
+    );
+    selected.must_contain = None;
+    let unconstrained = search(&store, &selected);
+    assert_eq!(unconstrained["truncated"], true);
+    assert_eq!(unconstrained["temporal_filter"]["coverage"], coverage);
+    selected.must_contain = Some("ACME Corp".into());
+
+    let old_passages = result
+        .items
+        .iter()
+        .filter(|item| item.evidence.source_key == "recent")
+        .map(|item| item.evidence.passage_id)
+        .collect::<Vec<_>>();
+    let before = old_passages
+        .iter()
+        .map(|id| store.success(&["get", &id.to_string()]))
+        .collect::<Vec<_>>();
+    store.apply(&json!({"entity_types":[{"name":"person"}]}), false);
+    let path = store.input(&json!({"items":[
+        {"kind":"entity","ref":"person","name":"Ada"},
+        {"kind":"type_membership","entity":{"ref":"person"},"entity_type":"person",
+         "support":old_passages.iter().map(|id| json!({"passage_id":id})).collect::<Vec<_>>()}
+    ]}));
+    let record = store.success(&["record", path.to_str().unwrap()]);
+    let knowledge = record["result"]["items"][1]["knowledge_id"]
+        .as_str()
+        .unwrap();
+    let prior_support = store.success(&["get", knowledge])["result"]["support"].clone();
+    let changed = publish(
+        &store,
+        vec![document("recent", &text, Unknown, None, "note")],
+    );
+    assert_eq!(changed.summary.updated, 1);
+    let repeated = publish(
+        &store,
+        vec![document("recent", &text, Unknown, None, "note")],
+    );
+    assert_eq!(repeated.summary.unchanged, 1);
+    assert_eq!(repeated.items[0].document_id, changed.items[0].document_id);
+    assert_eq!(repeated.items[0].revision_id, changed.items[0].revision_id);
+    assert_eq!(repeated.items[0].passage_ids, changed.items[0].passage_ids);
+    for (id, original) in old_passages.iter().zip(before) {
+        assert_eq!(store.success(&["get", &id.to_string()]), original);
+    }
+    for rebuild in [false, true] {
+        if rebuild {
+            store.success(&["graph", "rebuild"]);
+        }
+        assert_eq!(
+            store.success(&["get", knowledge])["result"]["support"],
+            prior_support
+        );
+        let graph = store.success(&["graph", "query",
+            "PREFIX c: <urn:commonplace:property:> SELECT ?state ?time WHERE {?k c:evidence ?p . ?p c:revision ?r . ?r c:temporal_state ?state; c:occurred_at ?time}"]);
+        let rows = graph["result"]["rows"].as_array().unwrap();
+        assert_eq!(rows.len(), 2);
+        for row in rows {
+            assert_eq!(row[0]["value"], "dated");
+            assert_eq!(row[1]["value"], normalized_cutoff);
+        }
+    }
+    let current = search(&store, &selected);
+    assert_eq!(current["items"].as_array().unwrap().len(), 2);
+    assert!(
+        current["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item["source_key"] == "background")
+    );
+    assert_eq!(
+        current["temporal_filter"]["coverage"],
+        json!({
+            "eligible_dated":70, "timeless":3, "older_dated":71, "excluded_unknown":72
+        })
     );
 }
 

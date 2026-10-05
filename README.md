@@ -483,8 +483,19 @@ rerunnable `conflict` rather than overwriting the other writer's revision.
 Ingestion does not rebuild or open the graph.
 
 UTF-8 is retained exactly, including CRLF, BOM, NUL, combining marks, and non-BMP
-characters. Paragraph-aware passages cover every source byte without overlap,
-with a fixed 1024-byte target and UTF-8-safe boundaries. Empty files are valid and
+characters. Paragraph-aware passages cover every source byte without gaps,
+with a fixed 1024-byte ceiling **including overlap** and UTF-8-safe boundaries.
+Whole paragraphs are packed without overlap as before. Oversized paragraphs use
+approximately balanced lengths with **target overlap: 102 bytes (10% of maximum
+passage size)**, not 10% of each smaller chunk. Nearby whitespace/UTF-8 boundaries
+can adjust the achieved overlap; both start and end offsets advance. The chunk
+count conservatively reserves target context, not a mathematically minimal count
+after adjustments. A whitespace-free 1100-byte ASCII paragraph yields
+`[0,601)` and `[499,1100)`: 601/601 bytes with 102 repeated source bytes, not a
+tiny rigid-window tail. Each citation remains an exact contiguous source slice.
+Only newly created revisions use this preparation. Unchanged inputs retain
+their revision/passage IDs and persisted historical boundaries; old citations
+are never rewritten or reindexed. Empty files are valid and
 have zero passages. `get` returns a complete document with all revision IDs, a
 complete revision with its text/metadata/temporal state and passage IDs, or an exact passage
 citation with source metadata and half-open byte offsets. It does not load
@@ -624,13 +635,34 @@ Dates written in Markdown/frontmatter or filenames are not automatically extract
 With `--since`, `temporal_filter` contains normalized `since`,
 `includes_timeless: true`, `coverage: {eligible_dated, timeless, older_dated, excluded_unknown}`, and
 `diagnostics`. Counts concern **current sources after source-type filters**, not
-query matches, passages, historical revisions or candidates; empty sources count.
+query matches, passage phrase constraints, overlapping passages, historical
+revisions or candidates; empty sources count.
 When any unknown dates were excluded, diagnostics contains
 `{"code":"unknown_dates_excluded","message":"Sources with unknown event dates are excluded by --since; results do not cover those sources."}`,
 even with nonempty/empty results or zero limit. Otherwise diagnostics is empty.
 These counts describe collection coverage, not exhaustive relevance or certainty
 that no evidence exists. Returned items and authoritative revision/passage/
 knowledge-support reads retain their immutable cited `temporal_state`.
+
+Use optional single `--must-contain 'ACME Corp'` to require a **literal contiguous
+phrase in each returned passage**, not elsewhere in the source, title, or
+metadata:
+
+```sh
+commonplace search 'MACC commitment' --must-contain 'ACME Corp' --json
+```
+
+Both SQL candidate paths apply this constraint **before** their limits.
+Matching lowercases both whole strings with Rust's Unicode `str::to_lowercase`
+and checks substring containment. This is not full Unicode case folding or
+normalization: `ÉCRAN` matches `écran`, `Straße` differs from `STRASSE`,
+composed/decomposed accents differ, and contextual Greek final sigma differs from
+ordinary sigma. Whitespace (including leading/trailing spaces) and punctuation
+are literal. There is no regex, raw FTS, word-boundary, entity, or alias matching.
+The phrase must be nonblank, contain no NUL, and fit 4096 original UTF-8 bytes and
+64 whitespace-delimited terms. Without the flag, normal search is unchanged.
+Even with it, results are bounded retrieval, not an exhaustive relevant-evidence
+or no-evidence guarantee.
 
 Both paths apply the same filters before retaining 64 candidates each. Vector
 distance is evaluated by sqlite-vec inside SQLite, not by an application vector
@@ -639,6 +671,10 @@ distance ties use passage IDs. Equal-weight reciprocal-rank fusion (constant 60)
 deduplicates candidates, then the pinned local reranker processes at most 64
 passages in batches of eight. Fusion ties use passage IDs; final-score ties use
 fusion order. Both retrieval paths and hydration share one SQLite read snapshot.
+Adjacent overlapping passages remain distinct canonical passage IDs, so repeated
+context can appear in multiple results. Existing passage-ID deduplication,
+ranking and truncation behavior is unchanged; there is no content-level
+deduplication.
 
 `truncated: true` means a candidate sentinel proved additional candidates, the
 fusion set exceeded the rerank cap, or final results exceeded `--limit`. It is

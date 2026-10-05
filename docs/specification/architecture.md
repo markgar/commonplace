@@ -321,6 +321,10 @@ search_documents(context, query)
 The workflow obtains lexical and vector candidates in one read session, fuses
 and deduplicates them, reranks a bounded set, and hydrates exact evidence before
 returning results.
+The shared storage predicate applies optional `--must-contain` to canonical
+passage text before either SQL candidate limit. A deterministic SQLite scalar
+function implements the product's Unicode lowercase literal-substring semantics
+for both paths; no source-wide matching or post-cutoff application filter is used.
 
 With since, both SQL candidate paths admit dated current revisions at/after the
 normalized inclusive cutoff plus timeless context and exclude unknown dates,

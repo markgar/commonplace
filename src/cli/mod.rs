@@ -55,6 +55,9 @@ enum Command {
     Search {
         /// Plain text, not FTS syntax (maximum 4096 UTF-8 bytes and 64 terms).
         query: String,
+        /// Literal contiguous passage phrase; Unicode lowercase matching, no normalization.
+        #[arg(long)]
+        must_contain: Option<String>,
         /// Inclusive dated source cutoff (RFC3339), plus timeless context; excludes unknown dates and reports coverage.
         #[arg(long)]
         since: Option<String>,
@@ -246,6 +249,7 @@ fn execute_command(
         Command::Ingest(args) => ingest::execute(&config.store, config.model_cache, *args),
         Command::Search {
             query,
+            must_contain,
             since,
             source_types,
             limit,
@@ -262,6 +266,7 @@ fn execute_command(
                     &config.store,
                     &crate::domain::search::SearchRequest {
                         query,
+                        must_contain,
                         since,
                         source_types,
                         limit,

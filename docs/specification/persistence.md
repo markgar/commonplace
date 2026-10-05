@@ -126,16 +126,57 @@ Temporal state is immutable revision metadata and participates in exact matching
 and digests. A temporal-only change creates a new revision of the same document;
 historical evidence retains its cited revision's state and time.
 
-The fixed passage target is **1024 UTF-8 bytes**. Paragraphs end after a blank
-LF or CRLF line (a line containing only spaces/tabs is blank); all delimiter bytes
-remain in the preceding paragraph. The final unterminated portion is also a
+The fixed passage maximum is **1024 UTF-8 bytes, including overlap**. Paragraphs
+end after a blank LF or CRLF line (a line containing only spaces/tabs is blank);
+all delimiter bytes remain in the preceding paragraph. The final unterminated portion is also a
 paragraph. Consecutive paragraph units are greedily accumulated while their
-combined length is at most the target. Before an oversized paragraph, flush any
-pending whole paragraphs. Split the oversized paragraph into nonoverlapping
-windows ending at the last UTF-8 character boundary at or before the target;
-emit its final remainder separately. Ordinals start at zero. Every byte is
-covered exactly once, with no empty passages; empty source text has zero passages.
+combined length is at most the maximum. Before an oversized paragraph, flush any
+pending whole paragraphs. Split the oversized paragraph into approximately
+balanced chunks with **target overlap: 102 bytes (10% of maximum passage size)**,
+the floor of 1024/10, not 10% of each smaller balanced chunk. Only chunks within
+that paragraph overlap; ordinary packing and boundaries between paragraph units
+remain nonoverlapping.
+
+Compute a conservative UTF-8-feasible chunk count while reserving target
+context: start at the paragraph end, subtract at most 1024 bytes and round
+forward to a character boundary to obtain the earliest last-chunk start.
+For each preceding suffix, subtract 1024 bytes from the prior suffix start plus
+102 target-overlap bytes, again rounding forward, until the paragraph start is
+reached. Retain these suffix starts to bound forward cuts so the remaining
+chunks always fit. This count is not a guarantee of mathematically minimal
+chunk count after whitespace/UTF-8 adjustments.
+
+For each nonfinal chunk, the target length is the remaining source byte length
+plus 102 bytes per remaining boundary, divided by the remaining chunk count,
+rounded up. Among feasible character endpoints
+within 1024 bytes of the start, prefer the endpoint immediately after whitespace
+closest to the target, only if its distance is at most one quarter of the target
+length (rounded down). Otherwise choose the closest feasible UTF-8 endpoint.
+Break equal-distance ties toward the earlier endpoint. The next chunk's start
+targets the emitted endpoint minus 102 bytes. Prefer the closest after-whitespace
+boundary within 25 bytes of that target; otherwise choose the closest character
+boundary, again breaking ties earlier. Constrain this start by the remaining
+suffix capacity and strictly forward start progress. Both endpoints advance
+strictly; emit the final remainder. Whitespace and UTF-8 adjustments can change
+the achieved overlap.
+
+Thus a whitespace-free 1100-byte ASCII paragraph produces `[0,601)` and
+`[499,1100)`: 601/601 bytes, with 102 repeated source bytes, rather than a tiny
+tail. Every passage is an exact contiguous source slice at most 1024 bytes
+including overlap. Their union covers every byte with no gaps or empty passages;
+legitimate short sources are not rejected and empty text has zero passages.
+Publication validates first start zero, strictly increasing starts and ends,
+no gaps, UTF-8 slices, final passage lengths and complete union coverage; the
+generator owns where overlap is introduced. Ordinals start at zero.
 Golden tests pin these boundaries and the existing section 14 digest encoding.
+
+The approved balanced, target-overlapping boundary-generator replacement
+originally shipped for newly prepared revisions under `/2`; `/3` continues that
+generator. Within a compatible store, existing persisted passages
+remain authoritative, including historical rigid or balanced nonoverlapping
+boundaries. An unchanged digest does not cause re-preparation, reindexing, or a
+new revision.
+Identity and digest rules are unchanged; no migration or automatic rebuild occurs.
 
 Embedding uses the P2 selection:
 `Qdrant/all-MiniLM-L6-v2-onnx@8f518e882455312b086101e60691f5e6e2f05c3c`,
@@ -188,20 +229,26 @@ The implementation verifies:
 Search checks both index ID sets against canonical current passages in its one
 read snapshot, including empty indexes, and rejects incompatible vector
 declarations or missing/extra index rows without repair. Both candidate paths
-apply current-revision and source-type predicates before their limits. With
+apply current-revision, source-type, and optional passage-only literal phrase
+predicates before their limits. With
 `--since`, their identical temporal predicate admits timeless revisions OR dated
 revisions at/after the inclusive normalized cutoff, excluding unknown and older
 dated revisions. Canonical UTC text comparisons retain nanosecond precision
 without SQLite date rounding. No ingestion timestamp is a substitute.
 One aggregate query over current revisions after source-type filtering counts
 sources in all four coverage categories in the same read snapshot, independent
-of passages/query/candidates/results, including empty text sources.
+of passages, overlap, query, literal phrase constraint, candidates and results,
+including empty text sources.
 Dense candidates use the stock sqlite-vec `vec_distance_L2` function
 inside SQLite over eligible `vec0` rows, with distance/passage-ID ordering.
 This exhaustive native SQL evaluation permits deterministic cutoff ties and
 prefiltering without an application-level vector scan or index-layout change.
 Work scales with the eligible corpus; only bounded candidates leave SQLite.
 The retrieval constants in implementation section 4 are unchanged by /3.
+The phrase constraint uses one shared deterministic SQLite scalar function on
+canonical `passages.text`, with Rust Unicode whole-string lowercase substring
+semantics as specified in product section 5, not SQLite's ASCII-only `lower` or
+the contentless FTS text column. No durable table or index changes are required.
 
 ## 7. User vocabulary
 
@@ -745,3 +792,9 @@ extensions. An incompatible format is rejected without mutation.
 Representation changes that affect passage boundaries, embeddings, vector
 dimensions, lexical configuration, or table layout require a new store format
 and reingestion.
+
+The explicitly approved balanced, target-overlapping passage preparation in
+section 5 is a narrow exception: only newly created revisions use the new
+deterministic boundaries;
+persisted historical passages and unchanged-input revision identities remain
+untouched. It requires neither a new format nor reingestion of existing sources.
