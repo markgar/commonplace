@@ -476,7 +476,13 @@ Ingestion does not rebuild or open the graph.
 
 UTF-8 is retained exactly, including CRLF, BOM, NUL, combining marks, and non-BMP
 characters. Paragraph-aware passages cover every source byte without overlap,
-with a fixed 1024-byte target and UTF-8-safe boundaries. Empty files are valid and
+with a fixed 1024-byte ceiling and UTF-8-safe boundaries. Whole paragraphs are
+packed as before; oversized paragraphs use the minimum feasible chunk count and
+approximately balanced lengths, preferring nearby whitespace boundaries rather
+than leaving tiny rigid-window tails (1100 ASCII bytes split about 550/550).
+Only newly created revisions use this preparation. Unchanged inputs retain
+their revision/passage IDs and persisted historical boundaries; old citations
+are never rewritten or reindexed. Empty files are valid and
 have zero passages. `get` returns a complete document with all revision IDs, a
 complete revision with its text/metadata and passage IDs, or an exact passage
 citation with source metadata and half-open byte offsets. It does not load
@@ -608,6 +614,26 @@ it excludes unknown times. Source type filters are exact and case-sensitive,
 ORed when repeated, with at most 32 supplied values and 4096 aggregate UTF-8 bytes.
 Files ingested without metadata overrides have source type `file` and null time;
 dates written in Markdown are not automatically extracted.
+
+Use optional single `--must-contain 'ACME Corp'` to require a **literal contiguous
+phrase in each returned passage**, not elsewhere in the source, title, or
+metadata:
+
+```sh
+commonplace search 'MACC commitment' --must-contain 'ACME Corp' --json
+```
+
+Both SQL candidate paths apply this constraint **before** their limits.
+Matching lowercases both whole strings with Rust's Unicode `str::to_lowercase`
+and checks substring containment. This is not full Unicode case folding or
+normalization: `ÉCRAN` matches `écran`, `Straße` differs from `STRASSE`,
+composed/decomposed accents differ, and contextual Greek final sigma differs from
+ordinary sigma. Whitespace (including leading/trailing spaces) and punctuation
+are literal. There is no regex, raw FTS, word-boundary, entity, or alias matching.
+The phrase must be nonblank, contain no NUL, and fit 4096 original UTF-8 bytes and
+64 whitespace-delimited terms. Without the flag, normal search is unchanged.
+Even with it, results are bounded retrieval, not an exhaustive relevant-evidence
+or no-evidence guarantee.
 
 Both paths apply the same filters before retaining 64 candidates each. Vector
 distance is evaluated by sqlite-vec inside SQLite, not by an application vector

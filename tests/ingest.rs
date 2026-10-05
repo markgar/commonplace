@@ -471,6 +471,68 @@ fn graph_files(store: &Store) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
 }
 
 #[test]
+fn balanced_preparation_does_not_rewrite_persisted_historical_boundaries() {
+    let store = Store::new();
+    let text = "a".repeat(1100);
+    let mut model = DeterministicModel::default();
+    let first = run(&store, vec![input("historical", &text)], &mut model);
+    let ids = &first.items[0].passage_ids;
+    assert_eq!(ids.len(), 2);
+    // Seed the prior rigid-window representation without changing the revision digest.
+    let mut writer = SqliteDatabase::write(&store.root, std::time::Duration::ZERO).unwrap();
+    let tx = writer.transaction().unwrap();
+    for (id, start, end) in [(ids[0], 0, 1024), (ids[1], 1024, 1100)] {
+        tx.execute(
+            "UPDATE passages SET start_byte=?2,end_byte=?3,text=?4 WHERE passage_id=?1",
+            rusqlite::params![id.value(), start, end, &text[start..end]],
+        )
+        .unwrap();
+        tx.execute("DELETE FROM passage_fts WHERE rowid=?1", [id.value()])
+            .unwrap();
+        tx.execute(
+            "INSERT INTO passage_fts(rowid,text) VALUES (?1,?2)",
+            rusqlite::params![id.value(), &text[start..end]],
+        )
+        .unwrap();
+    }
+    tx.commit().unwrap();
+    drop(writer);
+    let old: Vec<_> = ids
+        .iter()
+        .map(|id| store.success(&["get", &id.to_string()]))
+        .collect();
+    let calls = model.calls.len();
+    let repeated = run(&store, vec![input("historical", &text)], &mut model);
+    assert_eq!(repeated.summary.unchanged, 1);
+    assert_eq!(repeated.items[0].revision_id, first.items[0].revision_id);
+    assert_eq!(repeated.items[0].passage_ids, *ids);
+    assert_eq!(model.calls.len(), calls);
+    let mut changed = input("historical", &text);
+    changed
+        .document
+        .as_mut()
+        .unwrap()
+        .metadata
+        .insert("edition".into(), json!(2));
+    let updated = run(&store, vec![changed], &mut model);
+    assert_eq!(updated.summary.updated, 1);
+    assert_ne!(updated.items[0].revision_id, first.items[0].revision_id);
+    for (index, id) in updated.items[0].passage_ids.iter().enumerate() {
+        let result = store.success(&["get", &id.to_string()]);
+        assert_eq!(result["result"]["start_byte"], index * 550);
+        assert_eq!(result["result"]["end_byte"], (index + 1) * 550);
+        assert_eq!(
+            result["result"]["text"],
+            &text[index * 550..(index + 1) * 550]
+        );
+    }
+    for (id, original) in ids.iter().zip(old) {
+        assert_eq!(store.success(&["get", &id.to_string()]), original);
+    }
+    assert_indexes(&store);
+}
+
+#[test]
 fn complete_pipeline_retains_exact_revisions_and_current_indexes() {
     let store = Store::new();
     let graph = graph_files(&store);

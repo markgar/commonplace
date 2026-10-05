@@ -124,11 +124,28 @@ LF or CRLF line (a line containing only spaces/tabs is blank); all delimiter byt
 remain in the preceding paragraph. The final unterminated portion is also a
 paragraph. Consecutive paragraph units are greedily accumulated while their
 combined length is at most the target. Before an oversized paragraph, flush any
-pending whole paragraphs. Split the oversized paragraph into nonoverlapping
-windows ending at the last UTF-8 character boundary at or before the target;
-emit its final remainder separately. Ordinals start at zero. Every byte is
+pending whole paragraphs. Split the oversized paragraph into the minimum
+UTF-8-feasible number of nonoverlapping chunks within the 1024-byte ceiling.
+Compute that count using backward greedy cuts: subtract at most 1024 bytes from
+each endpoint and round forward to a character boundary. Retain these suffix
+starts to bound subsequent cuts so the remaining chunks always fit.
+
+For each nonfinal chunk, the target length is the remaining byte length divided
+by the remaining chunk count, rounded up. Among feasible character endpoints
+within 1024 bytes of the start, prefer the endpoint immediately after whitespace
+closest to the target, only if its distance is at most one quarter of the target
+length (rounded down). Otherwise choose the closest feasible UTF-8 endpoint.
+Break equal-distance ties toward the earlier endpoint; emit the final remainder.
+Thus a whitespace-free 1100-byte ASCII paragraph splits 550/550 rather than
+1024/76, without rejecting legitimate short sources. Ordinals start at zero. Every byte is
 covered exactly once, with no empty passages; empty source text has zero passages.
 Golden tests pin these boundaries and the existing section 14 digest encoding.
+
+This approved boundary-generator replacement affects only newly prepared
+revisions under `/2`. Existing persisted passages remain authoritative even if
+their historical boundaries follow the former rigid-window algorithm. An
+unchanged digest does not cause re-preparation, reindexing, or a new revision.
+Identity and digest rules are unchanged; no migration or automatic rebuild occurs.
 
 Embedding uses the P2 selection:
 `Qdrant/all-MiniLM-L6-v2-onnx@8f518e882455312b086101e60691f5e6e2f05c3c`,
@@ -181,13 +198,18 @@ The implementation verifies:
 Search checks both index ID sets against canonical current passages in its one
 read snapshot, including empty indexes, and rejects incompatible vector
 declarations or missing/extra index rows without repair. Both candidate paths
-apply current-revision, source-type, and inclusive source-time predicates before
+apply current-revision, source-type, inclusive source-time, and optional
+passage-only literal phrase predicates before
 their limits. Dense candidates use the stock sqlite-vec `vec_distance_L2` function
 inside SQLite over eligible `vec0` rows, with distance/passage-ID ordering.
 This exhaustive native SQL evaluation permits deterministic cutoff ties and
 prefiltering without an application-level vector scan or index-layout change.
 Work scales with the eligible corpus; only bounded candidates leave SQLite.
 The initial retrieval constants in implementation section 4 do not change `/2`.
+The phrase constraint uses one shared deterministic SQLite scalar function on
+canonical `passages.text`, with Rust Unicode whole-string lowercase substring
+semantics as specified in product section 5, not SQLite's ASCII-only `lower` or
+the contentless FTS text column. No durable table or index changes are required.
 
 ## 7. User vocabulary
 
@@ -730,3 +752,8 @@ extensions. An incompatible format is rejected without mutation.
 Representation changes that affect passage boundaries, embeddings, vector
 dimensions, lexical configuration, or table layout require a new store format
 and reingestion.
+
+The explicitly approved balanced passage preparation in section 5 is a narrow
+exception: only newly created revisions use the new deterministic boundaries;
+persisted historical passages and unchanged-input revision identities remain
+untouched. It requires neither a new format nor reingestion of existing sources.
