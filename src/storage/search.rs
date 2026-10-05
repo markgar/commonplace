@@ -1,3 +1,4 @@
+use rusqlite::functions::FunctionFlags;
 use rusqlite::{Connection, params};
 
 use crate::domain::ids::PassageId;
@@ -15,6 +16,7 @@ const ELIGIBLE: &str = "
     )
     AND (?2 IS NULL OR rtrim(r.occurred_at, 'Z') >= rtrim(?2, 'Z'))
     AND (json_array_length(?3) = 0 OR r.source_type IN (SELECT value FROM json_each(?3)))
+    AND (?5 IS NULL OR passage_contains(p.text, ?5))
 ";
 
 pub fn validate_representation(connection: &Connection) -> Result<()> {
@@ -112,6 +114,20 @@ fn select(
     query: &dyn rusqlite::ToSql,
     filters: &SearchFilters,
 ) -> Result<Candidates> {
+    connection
+        .create_scalar_function(
+            "passage_contains",
+            2,
+            FunctionFlags::SQLITE_UTF8
+                | FunctionFlags::SQLITE_DETERMINISTIC
+                | FunctionFlags::SQLITE_INNOCUOUS,
+            |context| {
+                let text = context.get::<String>(0)?;
+                let phrase = context.get::<String>(1)?;
+                Ok(text.to_lowercase().contains(&phrase))
+            },
+        )
+        .map_err(storage_error)?;
     let mut statement = connection.prepare(sql).map_err(storage_error)?;
     let mut ids = statement
         .query_map(
@@ -120,6 +136,7 @@ fn select(
                 filters.since,
                 serde_json::to_string(&filters.source_types)?,
                 CANDIDATE_LIMIT + 1,
+                filters.must_contain,
             ],
             |row| row.get::<_, i64>(0),
         )

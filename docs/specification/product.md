@@ -231,10 +231,22 @@ One deterministic paragraph-aware algorithm prepares passages:
 
 1. accumulate whole paragraphs up to a fixed target size;
 2. preserve exact source text and offsets;
-3. split an oversized paragraph into fixed, nonoverlapping windows; and
+3. split an oversized paragraph into balanced chunks with target overlap:
+   102 bytes (10% of maximum passage size), preferring nearby whitespace
+   boundaries and falling back to UTF-8 character boundaries, all within
+   1024 bytes including overlap; and
 4. assign stable ordinals within the revision.
 
-Passages do not overlap. Adapters cannot provide custom passage boundaries.
+Whole-paragraph packing remains nonoverlapping. Only adjacent chunks within an
+oversized paragraph overlap; rounding and whitespace/UTF-8 adjustments can change
+the achieved overlap. Their exact source slices cover the full paragraph with no
+gaps, and both start and end offsets advance strictly. The algorithm reserves
+target context to choose a bounded chunk count; it does not promise a
+mathematically minimal count after boundary adjustments. Adapters cannot provide
+custom passage boundaries.
+The exact algorithm is owned by persistence section 5. Preparation applies only
+to newly created revisions; unchanged inputs keep their persisted passages and
+IDs, and historical citation boundaries are never rewritten.
 
 Each passage stores:
 
@@ -277,9 +289,23 @@ Every result includes:
 - score or rank information; and
 - explicit truncation information.
 
-Supported filters are optional `--since` and repeatable `--source-type`. Both
+Supported filters are optional `--since`, repeatable `--source-type`, and optional
+single `--must-contain '<phrase>'`. All
 apply identically to lexical and vector candidate selection. Structured entity
 or graph-expansion filters are not part of hybrid search.
+
+`--must-contain` requires a literal contiguous substring of the **passage text**,
+not the full source, title, or metadata. Both paths apply it in SQLite before
+their candidate limits. Matching lowercases both whole strings using Rust
+`str::to_lowercase` (Unicode lowercase) and compares the resulting substring;
+it does not perform Unicode normalization or full case folding. For example,
+`ÉCRAN` matches `écran`, but `Straße` does not match `STRASSE`, composed and
+decomposed accents differ, and contextual Greek final sigma remains distinct
+from ordinary sigma. Whitespace and punctuation are literal and retained,
+including leading/trailing whitespace. There is no regex, FTS syntax, word
+boundary, entity, or alias interpretation. The phrase must be nonblank, contain
+no NUL, and fit 4096 original UTF-8 bytes and 64 whitespace-delimited terms.
+Omitting the flag preserves ordinary hybrid retrieval.
 
 Ordinary results include final rank and may include a lightweight final score.
 They do not expose candidate-stage membership, model identities, fusion

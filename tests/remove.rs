@@ -272,6 +272,7 @@ fn removes_all_revisions_retains_knowledge_unrelated_evidence_and_new_identity()
         &store.root,
         &SearchRequest {
             query: "needle".into(),
+            must_contain: None,
             since: None,
             source_types: vec![],
             limit: 10,

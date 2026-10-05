@@ -15,6 +15,7 @@ const FUSION_CONSTANT: f64 = 60.0;
 #[derive(Debug)]
 pub struct SearchRequest {
     pub query: String,
+    pub must_contain: Option<String>,
     pub since: Option<String>,
     pub source_types: Vec<String>,
     pub limit: usize,
@@ -31,6 +32,18 @@ impl SearchRequest {
             return Err(CommonplaceError::LimitExceeded(
                 "search query exceeds 4096 UTF-8 bytes or 64 whitespace-delimited terms".into(),
             ));
+        }
+        if let Some(phrase) = &self.must_contain {
+            if phrase.trim().is_empty() || phrase.contains('\0') {
+                return Err(CommonplaceError::InvalidInput(
+                    "search --must-contain must be nonblank and contain no NUL".into(),
+                ));
+            }
+            if phrase.len() > 4096 || phrase.split_whitespace().count() > 64 {
+                return Err(CommonplaceError::LimitExceeded(
+                    "search --must-contain exceeds 4096 UTF-8 bytes or 64 whitespace-delimited terms".into(),
+                ));
+            }
         }
         if self.limit > MAX_RESULT_LIMIT {
             return Err(CommonplaceError::LimitExceeded(format!(
@@ -70,6 +83,7 @@ impl SearchRequest {
         source_types.sort();
         source_types.dedup();
         Ok(SearchFilters {
+            must_contain: self.must_contain.as_deref().map(str::to_lowercase),
             since,
             source_types,
         })
@@ -86,6 +100,7 @@ impl SearchRequest {
 
 #[derive(Debug)]
 pub struct SearchFilters {
+    pub must_contain: Option<String>,
     pub since: Option<String>,
     pub source_types: Vec<String>,
 }

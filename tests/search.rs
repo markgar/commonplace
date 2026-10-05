@@ -94,6 +94,7 @@ fn publish(root: &std::path::Path, inputs: Vec<ingest::InputItem>) {
 fn request(query: &str, limit: usize) -> SearchRequest {
     SearchRequest {
         query: query.into(),
+        must_contain: None,
         since: None,
         source_types: vec![],
         limit,
@@ -291,6 +292,202 @@ fn filters_precede_both_cutoffs_and_preserve_nanoseconds_offsets_and_nulls() {
     assert_paths(&request, &[]);
     request.since = None;
     assert_paths(&request, &[71, 72, 73, 74]);
+}
+
+#[test]
+fn required_phrase_precedes_both_candidate_limits_and_preserves_exact_citations() {
+    let store = Store::new();
+    let mut inputs: Vec<_> = (0..70)
+        .map(|i| input(&format!("irrelevant-{i}"), "needle", "note", None))
+        .collect();
+    inputs.push(input("account", "lexical needle ACME Corp", "note", None));
+    publish(&store.root, inputs);
+    let mut request = request("needle", 50);
+    request.must_contain = Some("acme CORP".into());
+    let session = SqliteDatabase::read(&store.root).unwrap();
+    let filters = request.validate().unwrap();
+    for candidates in [
+        queries::lexical(session.connection(), &request.lexical_query(), &filters).unwrap(),
+        queries::vector(session.connection(), &vector(0), &filters).unwrap(),
+    ] {
+        assert_eq!(candidates.ids, [PassageId::new(71).unwrap()]);
+        assert!(!candidates.truncated);
+    }
+    let result = execute(&store, &request);
+    assert_eq!(result.items.len(), 1);
+    assert!(!result.truncated);
+    assert_eq!(result.items[0].evidence.text, "lexical needle ACME Corp");
+    assert_eq!(
+        serde_json::to_value(&result.items[0].evidence).unwrap(),
+        serde_json::to_value(
+            evidence::passage(session.connection(), result.items[0].evidence.passage_id).unwrap()
+        )
+        .unwrap()
+    );
+    request.limit = 0;
+    assert!(execute(&store, &request).truncated);
+    request.must_contain = Some("no evidence of this phrase".into());
+    let empty = execute(&store, &request);
+    assert!(empty.items.is_empty());
+    assert!(!empty.truncated);
+    request.must_contain = None;
+    request.limit = 50;
+    assert_eq!(execute(&store, &request).items.len(), 50);
+    drop(session);
+    publish(
+        &store.root,
+        (0..64)
+            .map(|i| input(&format!("matching-{i}"), "needle ACME Corp", "note", None))
+            .collect(),
+    );
+    request.must_contain = Some("acme corp".into());
+    let session = SqliteDatabase::read(&store.root).unwrap();
+    let filters = request.validate().unwrap();
+    for candidates in [
+        queries::lexical(session.connection(), &request.lexical_query(), &filters).unwrap(),
+        queries::vector(session.connection(), &vector(0), &filters).unwrap(),
+    ] {
+        assert_eq!(candidates.ids.len(), CANDIDATE_LIMIT);
+        assert!(candidates.truncated);
+        assert!(candidates.ids.iter().all(|id| id.value() >= 71));
+    }
+    let result = execute(&store, &request);
+    assert_eq!(result.items.len(), 50);
+    assert!(result.truncated);
+}
+
+#[test]
+fn required_phrase_is_passage_only_not_title_metadata_or_other_passages() {
+    let store = Store::new();
+    let mut title_only = input("title", "needle unrelated", "note", None);
+    let document = title_only.document.as_mut().unwrap();
+    document.title = Some("ACME Corp".into());
+    document
+        .metadata
+        .insert("account".into(), json!("ACME Corp"));
+    let split_source = format!("{}\n\nneedle ACME Corp", "needle ".repeat(146));
+    publish(
+        &store.root,
+        vec![title_only, input("split", &split_source, "note", None)],
+    );
+    let mut request = request("needle", 50);
+    request.must_contain = Some("ACME Corp".into());
+    let session = SqliteDatabase::read(&store.root).unwrap();
+    let filters = request.validate().unwrap();
+    for candidates in [
+        queries::lexical(session.connection(), &request.lexical_query(), &filters).unwrap(),
+        queries::vector(session.connection(), &vector(0), &filters).unwrap(),
+    ] {
+        assert_eq!(candidates.ids.len(), 1);
+        let passage = evidence::passage(session.connection(), candidates.ids[0]).unwrap();
+        assert_eq!(passage.source_key, "split");
+        assert_eq!(passage.text, "needle ACME Corp");
+        assert_eq!(passage.start_byte, 1024);
+    }
+}
+
+#[test]
+fn required_phrase_uses_literal_contiguous_unicode_lowercase_without_normalization() {
+    let store = Store::new();
+    publish(
+        &store.root,
+        vec![
+            input("unicode", "needle ÉCRAN Straße ΟΣ", "note", None),
+            input("decomposed", "needle e\u{301}cran STRASSE σ", "note", None),
+            input("literal", "needle \"%_.* OR\" ACME  Corp", "note", None),
+            input("ordinary", "needle ACME Corp", "note", None),
+            input("nul", "needle A\0BC", "note", None),
+        ],
+    );
+    let session = SqliteDatabase::read(&store.root).unwrap();
+    for (phrase, expected) in [
+        ("écran", vec!["unicode"]),
+        ("e\u{301}cran", vec!["decomposed"]),
+        ("straße", vec!["unicode"]),
+        ("STRASSE", vec!["decomposed"]),
+        ("Σ", vec!["decomposed"]),
+        ("ς", vec!["unicode"]),
+        ("\"%_.* OR\"", vec!["literal"]),
+        ("ACME  Corp", vec!["literal"]),
+        ("ACME Corp", vec!["ordinary"]),
+        (" ACME Corp ", vec![]),
+        ("[a-z]+", vec![]),
+        ("CRAN", vec!["decomposed", "unicode"]),
+        ("bc", vec!["nul"]),
+    ] {
+        let mut request = request("needle", 50);
+        request.must_contain = Some(phrase.into());
+        let filters = request.validate().unwrap();
+        for candidates in [
+            queries::lexical(session.connection(), &request.lexical_query(), &filters).unwrap(),
+            queries::vector(session.connection(), &vector(0), &filters).unwrap(),
+        ] {
+            let mut keys: Vec<_> = candidates
+                .ids
+                .into_iter()
+                .map(|id| {
+                    evidence::passage(session.connection(), id)
+                        .unwrap()
+                        .source_key
+                })
+                .collect();
+            keys.sort();
+            assert_eq!(keys, expected, "{phrase}");
+        }
+    }
+}
+
+#[test]
+fn overlapping_boundary_evidence_keeps_account_and_decision_and_distinct_results() {
+    let store = Store::new();
+    let phrase = "ACME Corp approved budget";
+    let mut text = format!("{} {phrase}. ", "x".repeat(535));
+    text.push_str(&"y".repeat(1100 - text.len()));
+    assert!(!text[..550].contains(phrase));
+    assert!(!text[550..].contains(phrase));
+    publish(
+        &store.root,
+        vec![input("boundary-account", &text, "note", None)],
+    );
+    let mut request = request("approved budget", 10);
+    request.must_contain = Some("ACME Corp".into());
+    let result = execute(&store, &request);
+    assert_eq!(result.items.len(), 2);
+    assert!(!result.truncated);
+    let session = SqliteDatabase::read(&store.root).unwrap();
+    let filters = request.validate().unwrap();
+    for candidates in [
+        queries::lexical(session.connection(), &request.lexical_query(), &filters).unwrap(),
+        queries::vector(session.connection(), &vector(0), &filters).unwrap(),
+    ] {
+        assert_eq!(candidates.ids.len(), 2);
+        assert_ne!(candidates.ids[0], candidates.ids[1]);
+        assert!(!candidates.truncated);
+    }
+    for item in &result.items {
+        let passage = &item.evidence;
+        assert!(passage.text.contains(phrase));
+        assert_eq!(passage.text, &text[passage.start_byte..passage.end_byte]);
+        assert!(passage.text.len() <= 1024);
+    }
+    assert_eq!(result.items[0].rank, 1);
+    assert_eq!(result.items[1].rank, 2);
+    assert_ne!(
+        result.items[0].evidence.passage_id,
+        result.items[1].evidence.passage_id
+    );
+    assert_eq!(
+        serde_json::to_value(&result).unwrap(),
+        serde_json::to_value(execute(&store, &request)).unwrap()
+    );
+    request.limit = 1;
+    let limited = execute(&store, &request);
+    assert_eq!(limited.items.len(), 1);
+    assert!(limited.truncated);
+    assert_eq!(
+        limited.items[0].evidence.passage_id,
+        result.items[0].evidence.passage_id
+    );
 }
 
 #[test]
@@ -509,6 +706,34 @@ fn malformed_inputs_and_numerical_boundaries_are_explicit_before_loading() {
     }
     assert!(request(&"x".repeat(4096), 50).validate().is_ok());
     assert!(request(&"x ".repeat(64), 50).validate().is_ok());
+    for (phrase, code) in [
+        ("".to_owned(), "invalid_input"),
+        (" \t\n".to_owned(), "invalid_input"),
+        ("a\0b".to_owned(), "invalid_input"),
+        ("🦀".repeat(1025), "limit_exceeded"),
+        ("x ".repeat(65), "limit_exceeded"),
+    ] {
+        let mut request = request("query", 10);
+        request.must_contain = Some(phrase);
+        let mut embedding = Embedding::default();
+        assert_eq!(
+            search::search(
+                &store.root,
+                &request,
+                &mut embedding,
+                &mut Ranker::default()
+            )
+            .unwrap_err()
+            .code(),
+            code
+        );
+        assert_eq!(embedding.calls, 0);
+    }
+    for phrase in ["🦀".repeat(1024), "x ".repeat(64)] {
+        let mut request = request("query", 10);
+        request.must_contain = Some(phrase);
+        assert!(request.validate().is_ok());
+    }
     for (types, code) in [
         (vec!["".into()], "invalid_input"),
         (vec!["a\0b".into()], "invalid_input"),
@@ -534,12 +759,18 @@ fn malformed_inputs_and_numerical_boundaries_are_explicit_before_loading() {
         vec!["search", " "],
         vec!["search", "query", "--since", "bad"],
         vec!["search", "query", "--source-type", ""],
+        vec!["search", "query", "--must-contain", " \t"],
     ] {
         let error = store.failure(&args, "invalid_input", 2);
         assert_eq!(error["operation"], "search");
         assert_eq!(error["contract_version"], "1");
     }
     store.failure(&["search", "query", "--limit", "51"], "limit_exceeded", 2);
+    store.failure(
+        &["search", "query", "--must-contain", &"x".repeat(4097)],
+        "limit_exceeded",
+        2,
+    );
     assert_eq!(
         store
             .run(&["search", "query", "--limit", "-1"])
@@ -553,7 +784,14 @@ fn malformed_inputs_and_numerical_boundaries_are_explicit_before_loading() {
             "COMMONPLACE_MODEL_CACHE",
             store.directory.path().join("missing-models"),
         )
-        .args(["search", "needle", "--limit", "0"])
+        .args([
+            "search",
+            "needle",
+            "--limit",
+            "0",
+            "--must-contain",
+            "ACME Corp",
+        ])
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
@@ -561,6 +799,11 @@ fn malformed_inputs_and_numerical_boundaries_are_explicit_before_loading() {
     let error: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(error["error"]["code"], "model_unavailable");
     assert!(store.run(&["search", "--help"]).status.success());
+    assert!(
+        String::from_utf8(store.run(&["search", "--help"]).stdout)
+            .unwrap()
+            .contains("--must-contain")
+    );
 }
 
 struct WrongIdentity;
