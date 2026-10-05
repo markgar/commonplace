@@ -182,6 +182,7 @@ def main():
             'commonplace --store "$store" init\n\n'
             "Or deliberately create the optional user path defaults once:\n\n"
             'config="$HOME/Library/Application Support/commonplace/config.json"\n'
+            f'release_dir="$HOME/.local/share/commonplace/releases/{name}"\n'
             'store="$HOME/.local/share/commonplace/stores/personal"\n'
             'mkdir -p "$(dirname "$config")"\n'
             'tmp="$config.tmp"\n'

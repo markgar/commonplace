@@ -704,7 +704,7 @@ For example, a loaded file produces the common JSON envelope with:
     "source": "user_config"
   },
   "model_cache": {
-    "path": "/Users/example/.local/share/commonplace/releases/current/pinned-models",
+    "path": "/Users/example/.local/share/commonplace/releases/commonplace-0.1.0-0123456789ab-macos-arm64/pinned-models",
     "source": "user_config"
   }
 }
