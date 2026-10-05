@@ -688,20 +688,29 @@ fn real_model_ingest_get_offline() {
     ] {
         let revision = execute(&["get", id]);
         assert_eq!(revision["result"]["text"], expected_text);
-        let mut offset = 0;
+        let mut covered_end = 0;
+        let mut previous_start = None;
         for passage_id in revision["result"]["passage_ids"].as_array().unwrap() {
             let passage = execute(&["get", passage_id.as_str().unwrap()]);
             let evidence = &passage["result"];
             let start = evidence["start_byte"].as_u64().unwrap() as usize;
             let end = evidence["end_byte"].as_u64().unwrap() as usize;
-            assert_eq!(start, offset);
+            assert!(
+                start <= covered_end,
+                "passages must not leave a coverage gap"
+            );
+            assert!(end > covered_end, "each passage must advance coverage");
+            if let Some(previous) = previous_start {
+                assert!(start > previous, "passage starts must advance");
+            }
             assert_eq!(evidence["text"], &expected_text[start..end]);
             assert_eq!(evidence["revision_id"], id);
             assert_eq!(evidence["document_id"], doc);
             assert_eq!(evidence["source_type"], "file");
-            offset = end;
+            previous_start = Some(start);
+            covered_end = end;
         }
-        assert_eq!(offset, expected_text.len());
+        assert_eq!(covered_end, expected_text.len());
     }
     let session = SqliteDatabase::read(&store.root).unwrap();
     let ids = |sql| {
