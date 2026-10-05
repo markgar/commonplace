@@ -617,7 +617,7 @@ cargo run --bin commonplace -- --store .commonplace search 'escalation acknowled
 Search returns ranked current-revision passages with complete exact citations:
 the document/revision/passage IDs, source key/title/type/temporal state/time/metadata, ordinal,
 and half-open byte offsets from `get`, plus 1-based `rank`. The common `search`
-envelope has `result: {items, truncated, temporal_filter}`. Without since,
+envelope has `result: {items, truncated, temporal_filter}` (plus `scope` when supplied). Without date bounds,
 `temporal_filter` is null. There is no score threshold: unrelated queries
 can return nearest passages rather than an empty list.
 
@@ -632,17 +632,102 @@ ORed when repeated, with at most 32 supplied values and 4096 aggregate UTF-8 byt
 Files use source type `file` unless overridden; temporal intent is always explicit.
 Dates written in Markdown/frontmatter or filenames are not automatically extracted.
 
-With `--since`, `temporal_filter` contains normalized `since`,
-`includes_timeless: true`, `coverage: {eligible_dated, timeless, older_dated, excluded_unknown}`, and
-`diagnostics`. Counts concern **current sources after source-type filters**, not
+With either date bound, `temporal_filter` contains normalized nullable `since`/`until`,
+`includes_timeless: true`, `coverage: {eligible_dated, timeless, older_dated, newer_dated, excluded_unknown}`, and
+`diagnostics`. Counts concern **current sources after scope and source-type filters**, not
 query matches, passage phrase constraints, overlapping passages, historical
 revisions or candidates; empty sources count.
 When any unknown dates were excluded, diagnostics contains
-`{"code":"unknown_dates_excluded","message":"Sources with unknown event dates are excluded by --since; results do not cover those sources."}`,
+`{"code":"unknown_dates_excluded","message":"Sources with unknown event dates are excluded by the date window; results do not cover those sources."}`,
 even with nonempty/empty results or zero limit. Otherwise diagnostics is empty.
 These counts describe collection coverage, not exhaustive relevance or certainty
 that no evidence exists. Returned items and authoritative revision/passage/
 knowledge-support reads retain their immutable cited `temporal_state`.
+
+### Graph-selected scope, date windows and compact evidence
+
+Select canonical document IRIs in any schema-neutral graph SELECT, then search
+only that selection:
+
+```sh
+commonplace graph query "$SELECT_DOCUMENTS" --document-scope document \
+  | jq '.result' > scope.json
+commonplace search 'modernization risks and next actions' --scope scope.json \
+  --since '2026-09-14T00:00:00Z' --until '2026-10-05T23:59:59.999999999Z' \
+  --grouped --limit 10
+# Or pipe jq '.result' directly into search ... --scope -.
+commonplace search --describe-scope
+```
+
+`--document-scope` takes a projected variable name **without `?`**. Every retained
+binding must be a canonical `urn:commonplace:doc:N` IRI; unbound values, literals,
+other resource kinds and noncanonical spellings fail explicitly. Its result is
+`{"document_ids":["doc:1"],"truncated":false}`. Search reads **that result object**,
+not the whole command envelope: use `jq '.result'`. Scope input is strict JSON,
+bounded to 64 KiB and 1024 supplied canonical IDs (including duplicates).
+Duplicates are deduplicated and counted; missing/removed IDs are reported and
+excluded. An explicit empty array never becomes a corpus-wide search. Both
+lexical and vector SQL apply scope, type, date and passage-phrase constraints
+**before** candidate selection, fusion and reranking. Historical citations still
+resolve through `get`; only current revisions are searchable.
+
+Scoped output adds `scope`: supplied/duplicate/selected/existing source counts,
+`missing_document_ids`, `excluded_source_type`, `eligible_sources`,
+`eligible_passages`, selection and individual retrieval-stage truncation flags,
+and diagnostics. Eligible sources include empty sources after type/date filters;
+eligible passages additionally satisfy the phrase constraint. Temporal buckets
+count current sources after scope and type filters, independently of query and
+phrase. A truncated graph selection remains searchable but is explicitly warned
+as partial. `empty_scope` and `no_eligible_passages` distinguish scoped emptiness
+from corpus-wide absence. Zero retained-result limit is not a no-match claim.
+Graph-selected documents need not include every relevant source.
+
+`--until` is an **inclusive** upper RFC3339 event bound, with the same exact UTC
+fractional-second handling as `--since`. Either bound includes timeless context
+and excludes unknown dates. Equal bounds admit that exact instant; reversed
+windows fail `invalid_input`. With either date bound, the uniform
+`temporal_filter` now contains nullable `since` and `until`,
+`includes_timeless: true`, five coverage buckets (`eligible_dated`, `timeless`,
+`older_dated`, `newer_dated`, `excluded_unknown`) and diagnostics. Without bounds
+it remains null. **JSON contract change:** since-only responses now also include
+`until: null` and `newer_dated: 0`; the unknown-date warning refers to the date
+window. Store/config format remains **/3**, with no reload or migration needed.
+
+`--grouped` replaces `items` with `groups`, sharing document/revision IDs, source
+key/title/type/state/time once per source. Groups follow first retained rank;
+passages within each group retain global rank. `--limit` still bounds **passages**,
+not groups. Each independent passage contains canonical passage ID, rank, original
+half-open `start_byte`/`end_byte`, and full exact `text`.
+Passages are never shortened or
+stitched into reconstructed document text: compactness comes from sharing source
+fields and omitting metadata, not discarding relevant text. Each passage is already
+bounded to 1024 UTF-8 bytes. Full metadata and historical revisions remain available
+via `get`. `truncated` describes collection cutoffs only, never text shortening.
+
+### Read-only entity discovery
+
+```sh
+commonplace entity list --type company --missing-identifier email --limit 100
+commonplace entity list --after entity:100 --limit 100
+commonplace entity resolve --name 'Exact name or alias'
+commonplace entity resolve --scheme email --value 'opaque@example.test'
+commonplace entity resolve --id entity:1
+```
+
+`entity list` returns `{items,truncated,next_after}` in canonical entity-ID
+order. Items are the same complete entity metadata as `get`, without its `kind`
+tag: canonical ID/name, aliases, scheme/value identifiers and active knowledge
+IDs together. Type filters use **active memberships**, not withdrawn history;
+untyped entities are included without a type filter. Missing-identifier filters
+use an existing scheme. Unknown types/schemes fail `invalid_input`. Limit defaults
+to 100 and accepts 0–1000; `--after` is exclusive keyset paging, and `next_after`
+is the last retained ID only when more results exist. Zero returns no items with
+an honest truncation flag and null cursor.
+
+Resolution reuses record's exact, case-sensitive name/alias/identifier semantics:
+ambiguity fails `conflict`, no match fails `not_found`. Schemes and values are not
+normalized or interpreted. These commands read SQLite only, load no models,
+do not open/rebuild RDF and never replay metadata writes for verification.
 
 Use optional single `--must-contain 'ACME Corp'` to require a **literal contiguous
 phrase in each returned passage**, not elsewhere in the source, title, or

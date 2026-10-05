@@ -272,6 +272,8 @@ fn removes_all_revisions_retains_knowledge_unrelated_evidence_and_new_identity()
     let found = search::search(
         &store.root,
         &SearchRequest {
+            until: None,
+            scope: None,
             query: "needle".into(),
             must_contain: None,
             since: None,

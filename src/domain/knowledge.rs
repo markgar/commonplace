@@ -187,6 +187,21 @@ impl RecordInput {
     }
 }
 
+impl EntityReference {
+    pub fn validate(&self) -> Result<()> {
+        let schema = schemars::generate::SchemaSettings::draft2020_12()
+            .into_generator()
+            .into_root_schema_for::<Self>();
+        let validator = jsonschema::validator_for(schema.as_value())
+            .map_err(|error| CommonplaceError::Storage(error.to_string()))?;
+        validator
+            .validate(&serde_json::to_value(self)?)
+            .map_err(|error| {
+                CommonplaceError::InvalidInput(format!("{}: {error}", error.instance_path))
+            })
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct Alias {
     pub alias: String,

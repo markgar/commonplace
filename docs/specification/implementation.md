@@ -694,6 +694,36 @@ with `--must-contain` and `--since` together, more than 64 excluded sources in
 both candidate paths, phrase/overlap-independent current-source coverage, and
 unchanged historical exact citations/support/RDF after temporal-only replacement.
 
+### 3.14b Scoped retrieval and entity discovery follow-on
+
+Tracker: [#55](https://github.com/markgar/commonplace/issues/55), one integrated PR.
+Prerequisites are integrated P3/P4/P5a/P5b and temporal intent on main
+`d9b2be13c5ed21c8e7b3f5ed7475a03ebba00abb`.
+
+Deliver all five capabilities together: graph SELECT document-scope bridge,
+strict allow-list before both candidate limits with coverage diagnostics,
+read-only entity discovery/resolution, inclusive upper event bound, and optional
+source-grouped full exact passages. Product sections 5 and 7.1 own concrete contracts.
+The user prefers simple direct breaking contracts over backward compatibility;
+no migrations, legacy aliases or dual formats. This slice needs no durable change,
+reload, dependency, backend/provider or RDF extension. Uniform temporal output
+adds nullable until/newer_dated, including since-only responses.
+
+Acceptance uses synthetic fresh stores and real SQLite/Oxigraph, substituting only
+expensive inference in routine tests: graph-selected documents survive more than
+64 globally stronger outsiders in BOTH branches; scope intersects type/phrase/time
+before cutoffs and RRF/rerank; missing/removed/duplicate/malformed/empty/absent scopes
+and truncated selection are explicit; only current revisions search while old get
+citations stay exact. Upper-only/both/equal/reversed windows preserve timezone and
+nanosecond boundaries, timeless/unknown semantics and current-source coverage.
+Entity tests prove metadata parity with get, exact alias/identifier ambiguity,
+active types after withdrawal, missing schemes, bounded paging and no writes.
+Grouped tests prove full exact text/get parity, independent UTF-8 spans and ranking/limit semantics.
+Public CLI acceptance uses pinned offline models sequentially on synthetic data.
+Run ordinary local fmt/clippy/all-target tests and independent blocker-only plan
+and final implementation reviews before authorized main integration. No personal
+store interaction, packaging/redeployment, Actions or broad platform CI.
+
 ### 3.15 Packet delivery and integration rules
 
 - Use one accountable owner per packet. Start with two implementation lanes;

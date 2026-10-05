@@ -326,13 +326,23 @@ passage text before either SQL candidate limit. A deterministic SQLite scalar
 function implements the product's Unicode lowercase literal-substring semantics
 for both paths; no source-wide matching or post-cutoff application filter is used.
 
-With since, both SQL candidate paths admit dated current revisions at/after the
-normalized inclusive cutoff plus timeless context and exclude unknown dates,
+With date bounds, both SQL candidate paths admit dated current revisions within the
+normalized inclusive window plus timeless context and exclude unknown dates,
 before their limits. An aggregate query in the same read snapshot counts current
-sources after source-type filters into four temporal coverage buckets. The response
+sources after scope/source-type filters into five temporal coverage buckets. The response
 includes those counts, the effective cutoff and explicit unknown-date coverage
 diagnostics even with nonempty results. Hydrated citations retain the immutable
 revision's typed temporal state through get, knowledge support and RDF projection.
+
+The shared SQL predicate also applies an explicit optional document allow-list
+and inclusive until bound before either limit. A null allow-list is unrestricted;
+JSON `[]` is empty, never an absent filter. Coverage and missing-ID inspection
+use the same read snapshot. Scope diagnostics separate selection completeness,
+source/type/date/phrase eligibility and lexical/vector/fusion/result cutoffs.
+Graph SELECT document-scope conversion validates canonical document terms without
+query rewriting or RDF changes; CLI scope input is one strict generated JSON
+object, with bounded file/stdin reads. Grouped output projects ranked evidence into
+independent full exact passages; it never runs another retrieval or synthesizes text.
 
 ### 6.4 Apply schema
 
@@ -397,6 +407,11 @@ coordinated operation with version-mismatch recovery.
 
 `get_record` reads canonical SQLite state, including withdrawn history and exact
 evidence.
+
+Entity list/resolve use a read session and existing entity hydration/resolution.
+List applies active-membership and missing-identifier predicates in SQLite before
+the ascending-ID sentinel limit; full metadata is hydrated only for retained IDs.
+No writer/graph lock, inference, graph open, or metadata mutation is involved.
 
 `query_graph` first verifies version parity, then executes a parsed SPARQL SELECT
 through the native read-only store. It consumes at most `row_limit + 1` solutions

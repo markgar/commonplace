@@ -1,3 +1,4 @@
+pub mod entity;
 pub mod get;
 pub mod graph;
 pub mod ingest;

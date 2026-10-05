@@ -53,6 +53,44 @@ pub struct SelectResult {
     pub truncated: bool,
 }
 
+impl SelectResult {
+    pub fn document_scope(self, column: &str) -> Result<crate::domain::search::DocumentScope> {
+        let index = self
+            .columns
+            .iter()
+            .position(|name| name == column)
+            .ok_or_else(|| {
+                CommonplaceError::InvalidInput(format!(
+                    "SELECT has no column {column:?}; pass its variable name without ?"
+                ))
+            })?;
+        let document_ids = self
+            .rows
+            .into_iter()
+            .enumerate()
+            .map(|(row, values)| {
+                let Some(Some(RdfTerm::Uri { value })) = values.get(index) else {
+                    return Err(CommonplaceError::InvalidInput(format!(
+                        "row {row} column {column:?} must bind a canonical document IRI"
+                    )));
+                };
+                let value = value.strip_prefix("urn:commonplace:").ok_or_else(|| {
+                    CommonplaceError::InvalidInput(format!(
+                        "row {row}: not a Commonplace document IRI"
+                    ))
+                })?;
+                crate::domain::search::canonical_document_id(value).map(|id| id.to_string())
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let scope = crate::domain::search::DocumentScope {
+            document_ids,
+            truncated: self.truncated,
+        };
+        scope.validate()?;
+        Ok(scope)
+    }
+}
+
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum RdfTerm {
