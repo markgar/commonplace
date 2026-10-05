@@ -123,6 +123,11 @@ def main():
             "build output does not confirm the identified static ONNX library")
 
     provenance = {
+        "format": "commonplace-package-provenance/1",
+        "package": {
+            "name": package["name"],
+            "version": package["version"],
+        },
         "source_commit": commit,
         "source_tree": tree,
         "cargo_lock_sha256": sha256(ROOT / "Cargo.lock"),
@@ -166,19 +171,13 @@ def main():
         (bundle / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
         (bundle / "USAGE.txt").write_text(
             "Local macOS arm64 development package; not a published or notarized release.\n"
-            "Verify SHA256SUMS after extraction. No Python, Cargo or compiler is used by commonplace.\n"
-            "From the extracted package directory, install without replacing an existing installation:\n\n"
-            f'release_dir="$HOME/.local/share/commonplace/releases/{name}"\n'
-            'bin="$HOME/.local/bin/commonplace"\n'
-            'test ! -e "$release_dir" && test ! -e "$bin" || exit 1\n'
-            'mkdir -p "$(dirname "$release_dir")" "$(dirname "$bin")"\n'
-            'cp -R . "$release_dir"\n'
-            'install -m 755 "$release_dir/commonplace" "$bin"\n'
-            '(cd "$release_dir" && shasum -a 256 -c SHA256SUMS)\n'
-            'cmp "$release_dir/commonplace" "$bin"\n\n'
+            "Use the repository-owned scripts/install-local-macos.py helper with the archive path.\n"
+            "The helper verifies the archive sidecar, this bundle and the executable before installation.\n"
+            "It may be copied alongside the archive; installation requires no GitHub access or gh.\n"
+            "No Python, Cargo or compiler is used by the installed commonplace executable.\n\n"
             "For every terminal or local agent process, supply the existing model-cache environment:\n\n"
             'export PATH="$HOME/.local/bin:$PATH"\n'
-            'export COMMONPLACE_MODEL_CACHE="$release_dir/pinned-models"\n'
+            f'export COMMONPLACE_MODEL_CACHE="$HOME/.local/share/commonplace/releases/{name}/pinned-models"\n'
             'store="$HOME/.local/share/commonplace/stores/personal"\n'
             'commonplace --store "$store" init\n\n'
             "Keep the store outside the release directory. Installation neither copies nor removes stores.\n"

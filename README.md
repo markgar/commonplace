@@ -662,6 +662,29 @@ test-only `COMMONPLACE_TEST_BINARY` selector emits an in-process path/hash recei
 package acceptance must verify that receipt, not just a passing test result.
 This remains developer-host evidence, not independent clean-target certification.
 
+Install an already-produced verified archive through the repository-owned
+macOS arm64 installer:
+
+```sh
+python3 scripts/install-local-macos.py \
+  /absolute/path/commonplace-<version>-<commit>-macos-arm64.tar.gz
+```
+
+It verifies the archive sidecar and bundle, publishes immutable contents under
+`~/.local/share/commonplace/releases/`, atomically updates
+`~/.local/bin/commonplace`, and atomically writes
+`~/.local/share/commonplace/installed-release.json`. Exact reinstall is
+idempotent; verified updates preserve stores, configuration, reports and earlier
+releases. The installer neither downloads nor edits shell profiles, so put
+`~/.local/bin` on `PATH` yourself or use the absolute executable path. See the
+local release guide for receipt inspection and partial-install retry rules.
+It also narrowly adopts the existing strict `commonplace-manual-install/1`
+current-main installation on its first verified archive update; other legacy or
+mismatched manual state is rejected.
+Interrupted activation is pinned to its exact archive by
+`~/.local/share/commonplace/installed-release.pending.json`; retry that archive
+to complete receipt publication and clear the marker.
+
 ```sh
 cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
