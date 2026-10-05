@@ -231,12 +231,19 @@ One deterministic paragraph-aware algorithm prepares passages:
 
 1. accumulate whole paragraphs up to a fixed target size;
 2. preserve exact source text and offsets;
-3. split an oversized paragraph into the minimum feasible number of balanced,
-   nonoverlapping chunks, preferring nearby whitespace boundaries and falling
-   back to UTF-8 character boundaries, all within 1024 bytes; and
+3. split an oversized paragraph into balanced chunks with target overlap:
+   102 bytes (10% of maximum passage size), preferring nearby whitespace
+   boundaries and falling back to UTF-8 character boundaries, all within
+   1024 bytes including overlap; and
 4. assign stable ordinals within the revision.
 
-Passages do not overlap. Adapters cannot provide custom passage boundaries.
+Whole-paragraph packing remains nonoverlapping. Only adjacent chunks within an
+oversized paragraph overlap; rounding and whitespace/UTF-8 adjustments can change
+the achieved overlap. Their exact source slices cover the full paragraph with no
+gaps, and both start and end offsets advance strictly. The algorithm reserves
+target context to choose a bounded chunk count; it does not promise a
+mathematically minimal count after boundary adjustments. Adapters cannot provide
+custom passage boundaries.
 The exact algorithm is owned by persistence section 5. Preparation applies only
 to newly created revisions; unchanged inputs keep their persisted passages and
 IDs, and historical citation boundaries are never rewritten.

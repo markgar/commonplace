@@ -378,19 +378,27 @@ pipeline tests; attach the real-model result to this packet's acceptance.
 Depends on integrated P3 and P4; their completed packets are not reopened.
 
 **Outcome/work:** replace oversized-paragraph rigid windows with balanced,
-word-aware UTF-8-safe chunks for newly created revisions only, following
+word-aware UTF-8-safe chunks with target overlap: 102 bytes (10% of maximum
+passage size), for newly created revisions only, following
 persistence section 5. Add optional single `search --must-contain '<phrase>'`,
 with product section 5's passage-only literal Unicode lowercase semantics and
 input bounds, before both SQLite candidate limits. Preserve normal search,
 exact immutable citations, existing identity/digests, and persisted historical
 passages. Update the owning specifications and README with these approved choices.
 
-**Acceptance:** pin approximately 550/550 splitting for 1100-byte paragraphs,
-nearby word boundaries, UTF-8 fallback, minimum feasible chunk count, ceiling,
-determinism, full byte coverage, and passage limits. Short sources remain valid;
+**Acceptance:** pin `[0,601)` / `[499,1100)` splitting for a whitespace-free
+1100-byte ASCII paragraph: 601/601 bytes with 102 repeated bytes. Verify nearby
+word boundaries, UTF-8 fallback, the documented conservative context-reserving
+count, ceiling including overlap, determinism, exact repeated byte intersections,
+complete union coverage with no gaps, strictly advancing offsets, no tiny tails,
+unchanged ordinary packing, and passage limits. Short sources remain valid;
 an unchanged historical rigid-window revision is not rebuilt, while a changed
-revision uses balanced boundaries and old citations remain exact. Real SQLite
-tests must show both retrieval paths find matching passages beyond more than
+revision uses balanced overlapping boundaries and old citations remain exact.
+Cover historical rigid and balanced nonoverlapping revisions. A boundary-spanning
+account/decision example must retrieve complete exact evidence. Adjacent
+overlapping passage IDs remain distinct results under existing fusion,
+ranking and truncation; no content-level deduplication contract is added.
+Real SQLite tests must show both retrieval paths find matching passages beyond more than
 64 otherwise eligible distractors, exclude title/metadata/other-passage-only
 matches, and preserve literal whitespace/punctuation and documented Unicode
 semantics. Cover validation, common CLI errors, empty/zero-limit behavior and

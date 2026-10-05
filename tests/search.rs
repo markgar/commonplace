@@ -438,6 +438,59 @@ fn required_phrase_uses_literal_contiguous_unicode_lowercase_without_normalizati
 }
 
 #[test]
+fn overlapping_boundary_evidence_keeps_account_and_decision_and_distinct_results() {
+    let store = Store::new();
+    let phrase = "ACME Corp approved budget";
+    let mut text = format!("{} {phrase}. ", "x".repeat(535));
+    text.push_str(&"y".repeat(1100 - text.len()));
+    assert!(!text[..550].contains(phrase));
+    assert!(!text[550..].contains(phrase));
+    publish(
+        &store.root,
+        vec![input("boundary-account", &text, "note", None)],
+    );
+    let mut request = request("approved budget", 10);
+    request.must_contain = Some("ACME Corp".into());
+    let result = execute(&store, &request);
+    assert_eq!(result.items.len(), 2);
+    assert!(!result.truncated);
+    let session = SqliteDatabase::read(&store.root).unwrap();
+    let filters = request.validate().unwrap();
+    for candidates in [
+        queries::lexical(session.connection(), &request.lexical_query(), &filters).unwrap(),
+        queries::vector(session.connection(), &vector(0), &filters).unwrap(),
+    ] {
+        assert_eq!(candidates.ids.len(), 2);
+        assert_ne!(candidates.ids[0], candidates.ids[1]);
+        assert!(!candidates.truncated);
+    }
+    for item in &result.items {
+        let passage = &item.evidence;
+        assert!(passage.text.contains(phrase));
+        assert_eq!(passage.text, &text[passage.start_byte..passage.end_byte]);
+        assert!(passage.text.len() <= 1024);
+    }
+    assert_eq!(result.items[0].rank, 1);
+    assert_eq!(result.items[1].rank, 2);
+    assert_ne!(
+        result.items[0].evidence.passage_id,
+        result.items[1].evidence.passage_id
+    );
+    assert_eq!(
+        serde_json::to_value(&result).unwrap(),
+        serde_json::to_value(execute(&store, &request)).unwrap()
+    );
+    request.limit = 1;
+    let limited = execute(&store, &request);
+    assert_eq!(limited.items.len(), 1);
+    assert!(limited.truncated);
+    assert_eq!(
+        limited.items[0].evidence.passage_id,
+        result.items[0].evidence.passage_id
+    );
+}
+
+#[test]
 fn exact_hydration_and_one_snapshot_survive_current_revision_replacement() {
     let store = Store::new();
     let original = "needle\r\n\r\nExact \0e\u{301}🦀";

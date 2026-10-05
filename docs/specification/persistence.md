@@ -119,32 +119,55 @@ P3 completes the initial source representation under the adopted
 initialized empty stores have no source representation to reinterpret. There is
 no migration or second representation path.
 
-The fixed passage target is **1024 UTF-8 bytes**. Paragraphs end after a blank
-LF or CRLF line (a line containing only spaces/tabs is blank); all delimiter bytes
-remain in the preceding paragraph. The final unterminated portion is also a
+The fixed passage maximum is **1024 UTF-8 bytes, including overlap**. Paragraphs
+end after a blank LF or CRLF line (a line containing only spaces/tabs is blank);
+all delimiter bytes remain in the preceding paragraph. The final unterminated portion is also a
 paragraph. Consecutive paragraph units are greedily accumulated while their
-combined length is at most the target. Before an oversized paragraph, flush any
-pending whole paragraphs. Split the oversized paragraph into the minimum
-UTF-8-feasible number of nonoverlapping chunks within the 1024-byte ceiling.
-Compute that count using backward greedy cuts: subtract at most 1024 bytes from
-each endpoint and round forward to a character boundary. Retain these suffix
-starts to bound subsequent cuts so the remaining chunks always fit.
+combined length is at most the maximum. Before an oversized paragraph, flush any
+pending whole paragraphs. Split the oversized paragraph into approximately
+balanced chunks with **target overlap: 102 bytes (10% of maximum passage size)**,
+the floor of 1024/10, not 10% of each smaller balanced chunk. Only chunks within
+that paragraph overlap; ordinary packing and boundaries between paragraph units
+remain nonoverlapping.
 
-For each nonfinal chunk, the target length is the remaining byte length divided
-by the remaining chunk count, rounded up. Among feasible character endpoints
+Compute a conservative UTF-8-feasible chunk count while reserving target
+context: start at the paragraph end, subtract at most 1024 bytes and round
+forward to a character boundary to obtain the earliest last-chunk start.
+For each preceding suffix, subtract 1024 bytes from the prior suffix start plus
+102 target-overlap bytes, again rounding forward, until the paragraph start is
+reached. Retain these suffix starts to bound forward cuts so the remaining
+chunks always fit. This count is not a guarantee of mathematically minimal
+chunk count after whitespace/UTF-8 adjustments.
+
+For each nonfinal chunk, the target length is the remaining source byte length
+plus 102 bytes per remaining boundary, divided by the remaining chunk count,
+rounded up. Among feasible character endpoints
 within 1024 bytes of the start, prefer the endpoint immediately after whitespace
 closest to the target, only if its distance is at most one quarter of the target
 length (rounded down). Otherwise choose the closest feasible UTF-8 endpoint.
-Break equal-distance ties toward the earlier endpoint; emit the final remainder.
-Thus a whitespace-free 1100-byte ASCII paragraph splits 550/550 rather than
-1024/76, without rejecting legitimate short sources. Ordinals start at zero. Every byte is
-covered exactly once, with no empty passages; empty source text has zero passages.
+Break equal-distance ties toward the earlier endpoint. The next chunk's start
+targets the emitted endpoint minus 102 bytes. Prefer the closest after-whitespace
+boundary within 25 bytes of that target; otherwise choose the closest character
+boundary, again breaking ties earlier. Constrain this start by the remaining
+suffix capacity and strictly forward start progress. Both endpoints advance
+strictly; emit the final remainder. Whitespace and UTF-8 adjustments can change
+the achieved overlap.
+
+Thus a whitespace-free 1100-byte ASCII paragraph produces `[0,601)` and
+`[499,1100)`: 601/601 bytes, with 102 repeated source bytes, rather than a tiny
+tail. Every passage is an exact contiguous source slice at most 1024 bytes
+including overlap. Their union covers every byte with no gaps or empty passages;
+legitimate short sources are not rejected and empty text has zero passages.
+Publication validates first start zero, strictly increasing starts and ends,
+no gaps, UTF-8 slices, final passage lengths and complete union coverage; the
+generator owns where overlap is introduced. Ordinals start at zero.
 Golden tests pin these boundaries and the existing section 14 digest encoding.
 
-This approved boundary-generator replacement affects only newly prepared
-revisions under `/2`. Existing persisted passages remain authoritative even if
-their historical boundaries follow the former rigid-window algorithm. An
-unchanged digest does not cause re-preparation, reindexing, or a new revision.
+This approved balanced, target-overlapping boundary-generator replacement
+affects only newly prepared revisions under `/2`. Existing persisted passages
+remain authoritative, including historical rigid or balanced nonoverlapping
+boundaries. An unchanged digest does not cause re-preparation, reindexing, or a
+new revision.
 Identity and digest rules are unchanged; no migration or automatic rebuild occurs.
 
 Embedding uses the P2 selection:
@@ -753,7 +776,8 @@ Representation changes that affect passage boundaries, embeddings, vector
 dimensions, lexical configuration, or table layout require a new store format
 and reingestion.
 
-The explicitly approved balanced passage preparation in section 5 is a narrow
-exception: only newly created revisions use the new deterministic boundaries;
+The explicitly approved balanced, target-overlapping passage preparation in
+section 5 is a narrow exception: only newly created revisions use the new
+deterministic boundaries;
 persisted historical passages and unchanged-input revision identities remain
 untouched. It requires neither a new format nor reingestion of existing sources.

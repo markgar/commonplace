@@ -475,11 +475,16 @@ rerunnable `conflict` rather than overwriting the other writer's revision.
 Ingestion does not rebuild or open the graph.
 
 UTF-8 is retained exactly, including CRLF, BOM, NUL, combining marks, and non-BMP
-characters. Paragraph-aware passages cover every source byte without overlap,
-with a fixed 1024-byte ceiling and UTF-8-safe boundaries. Whole paragraphs are
-packed as before; oversized paragraphs use the minimum feasible chunk count and
-approximately balanced lengths, preferring nearby whitespace boundaries rather
-than leaving tiny rigid-window tails (1100 ASCII bytes split about 550/550).
+characters. Paragraph-aware passages cover every source byte without gaps,
+with a fixed 1024-byte ceiling **including overlap** and UTF-8-safe boundaries.
+Whole paragraphs are packed without overlap as before. Oversized paragraphs use
+approximately balanced lengths with **target overlap: 102 bytes (10% of maximum
+passage size)**, not 10% of each smaller chunk. Nearby whitespace/UTF-8 boundaries
+can adjust the achieved overlap; both start and end offsets advance. The chunk
+count conservatively reserves target context, not a mathematically minimal count
+after adjustments. A whitespace-free 1100-byte ASCII paragraph yields
+`[0,601)` and `[499,1100)`: 601/601 bytes with 102 repeated source bytes, not a
+tiny rigid-window tail. Each citation remains an exact contiguous source slice.
 Only newly created revisions use this preparation. Unchanged inputs retain
 their revision/passage IDs and persisted historical boundaries; old citations
 are never rewritten or reindexed. Empty files are valid and
@@ -642,6 +647,10 @@ distance ties use passage IDs. Equal-weight reciprocal-rank fusion (constant 60)
 deduplicates candidates, then the pinned local reranker processes at most 64
 passages in batches of eight. Fusion ties use passage IDs; final-score ties use
 fusion order. Both retrieval paths and hydration share one SQLite read snapshot.
+Adjacent overlapping passages remain distinct canonical passage IDs, so repeated
+context can appear in multiple results. Existing passage-ID deduplication,
+ranking and truncation behavior is unchanged; there is no content-level
+deduplication.
 
 `truncated: true` means a candidate sentinel proved additional candidates, the
 fusion set exceeded the rerank cap, or final results exceeded `--limit`. It is
