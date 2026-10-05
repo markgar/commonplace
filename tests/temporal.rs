@@ -74,6 +74,8 @@ fn request(since: Option<&str>, types: &[&str], limit: usize) -> SearchRequest {
         query: "needle".into(),
         must_contain: None,
         since: since.map(str::to_owned),
+        until: None,
+        scope: None,
         source_types: types.iter().map(|value| (*value).into()).collect(),
         limit,
     }
@@ -391,7 +393,7 @@ fn since_filters_both_paths_before_limits_and_counts_current_sources_not_matches
     assert_eq!(result["temporal_filter"]["includes_timeless"], true);
     assert_eq!(
         result["temporal_filter"]["coverage"],
-        json!({"eligible_dated":2,"timeless":3,"older_dated":71,"excluded_unknown":70})
+        json!({"eligible_dated":2,"timeless":3,"older_dated":71,"newer_dated":0,"excluded_unknown":70})
     );
     assert_eq!(
         result["temporal_filter"]["diagnostics"][0]["code"],
@@ -440,7 +442,7 @@ fn since_filters_both_paths_before_limits_and_counts_current_sources_not_matches
         );
         assert_eq!(
             result["temporal_filter"]["coverage"],
-            json!({"eligible_dated":2,"timeless":3,"older_dated":71,"excluded_unknown":70})
+            json!({"eligible_dated":2,"timeless":3,"older_dated":71,"newer_dated":0,"excluded_unknown":70})
         );
         assert_eq!(
             result["temporal_filter"]["diagnostics"]
@@ -459,7 +461,7 @@ fn since_filters_both_paths_before_limits_and_counts_current_sources_not_matches
     assert_eq!(none["truncated"], false);
     assert_eq!(
         none["temporal_filter"]["coverage"],
-        json!({"eligible_dated":0,"timeless":0,"older_dated":0,"excluded_unknown":0})
+        json!({"eligible_dated":0,"timeless":0,"older_dated":0,"newer_dated":0,"excluded_unknown":0})
     );
     assert_eq!(none["temporal_filter"]["diagnostics"], json!([]));
     assert!(search(&store, &request(None, &[], 50))["temporal_filter"].is_null());
@@ -549,7 +551,7 @@ fn combined_phrase_since_overlap_filters_keep_source_coverage_and_historical_cit
     );
     assert_eq!(changed_type.summary.updated, 1);
     let coverage = json!({
-        "eligible_dated":71, "timeless":3, "older_dated":71, "excluded_unknown":71
+        "eligible_dated":71, "timeless":3, "older_dated":71, "newer_dated":0, "excluded_unknown":71
     });
     let mut selected = request(Some(cutoff), &["note", "note"], 50);
     selected.query = "approved budget".into();
@@ -584,7 +586,7 @@ fn combined_phrase_since_overlap_filters_keep_source_coverage_and_historical_cit
     assert_eq!(result.items.len(), 4);
     assert!(!result.truncated);
     let temporal = result.temporal_filter.as_ref().unwrap();
-    assert_eq!(temporal.since, normalized_cutoff);
+    assert_eq!(temporal.since.as_deref(), Some(normalized_cutoff));
     assert!(temporal.includes_timeless);
     assert_eq!(serde_json::to_value(&temporal.coverage).unwrap(), coverage);
     assert_eq!(temporal.diagnostics[0].code, "unknown_dates_excluded");
@@ -697,7 +699,7 @@ fn combined_phrase_since_overlap_filters_keep_source_coverage_and_historical_cit
     assert_eq!(
         current["temporal_filter"]["coverage"],
         json!({
-            "eligible_dated":70, "timeless":3, "older_dated":71, "excluded_unknown":72
+            "eligible_dated":70, "timeless":3, "older_dated":71, "newer_dated":0, "excluded_unknown":72
         })
     );
 }

@@ -101,6 +101,8 @@ fn request(query: &str, limit: usize) -> SearchRequest {
         query: query.into(),
         must_contain: None,
         since: None,
+        until: None,
+        scope: None,
         source_types: vec![],
         limit,
     }

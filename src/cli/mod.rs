@@ -54,18 +54,34 @@ enum Command {
     /// Retrieve current exact passages using lexical/vector search and local reranking.
     Search {
         /// Plain text, not FTS syntax (maximum 4096 UTF-8 bytes and 64 terms).
-        query: String,
-        /// Literal contiguous passage phrase; Unicode lowercase matching, no normalization.
+        #[arg(
+            required_unless_present = "describe_scope",
+            conflicts_with = "describe_scope"
+        )]
+        query: Option<String>,
+        /// Describe the strict scope JSON input without opening a store or loading models.
         #[arg(long)]
+        describe_scope: bool,
+        /// JSON document scope from graph query --document-scope; use - for stdin.
+        #[arg(long, conflicts_with = "describe_scope")]
+        scope: Option<PathBuf>,
+        /// Group retained passages by source with bounded exact excerpts; limit still counts passages.
+        #[arg(long, conflicts_with = "describe_scope")]
+        grouped: bool,
+        /// Literal contiguous passage phrase; Unicode lowercase matching, no normalization.
+        #[arg(long, conflicts_with = "describe_scope")]
         must_contain: Option<String>,
         /// Inclusive dated source cutoff (RFC3339), plus timeless context; excludes unknown dates and reports coverage.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "describe_scope")]
         since: Option<String>,
+        /// Inclusive RFC3339 upper event bound, plus timeless context; excludes unknown dates.
+        #[arg(long, conflicts_with = "describe_scope")]
+        until: Option<String>,
         /// Exact source type; repeat to match any supplied type.
-        #[arg(long = "source-type")]
+        #[arg(long = "source-type", conflicts_with = "describe_scope")]
         source_types: Vec<String>,
         /// Retained results, 0 through 50; required models are checked even at zero.
-        #[arg(long, default_value_t = crate::domain::search::DEFAULT_RESULT_LIMIT)]
+        #[arg(long, default_value_t = crate::domain::search::DEFAULT_RESULT_LIMIT, conflicts_with = "describe_scope")]
         limit: usize,
     },
     /// Atomically record entities, metadata, cited types and facts from JSON or JSONL.
@@ -76,6 +92,11 @@ enum Command {
     Withdraw(withdraw::WithdrawArgs),
     /// Read document metadata, revision text, or an exact passage, entity, or knowledge item.
     Get { id: String },
+    /// Discover or resolve authoritative entity metadata without writes or inference.
+    Entity {
+        #[command(subcommand)]
+        command: EntityCommand,
+    },
     /// Apply or inspect your vocabulary (entity types, predicates, and identifiers).
     Schema {
         #[command(subcommand)]
@@ -102,9 +123,39 @@ enum GraphCommand {
         /// Cooperative evaluation budget in milliseconds, not a hard timeout.
         #[arg(long, default_value_t = 5000)]
         timeout_ms: u64,
+        /// Emit a reusable document scope from this SELECT column (variable name without ?).
+        #[arg(long)]
+        document_scope: Option<String>,
     },
     /// Rebuild from committed SQLite, repairing derived state only.
     Rebuild,
+}
+
+#[derive(Debug, Subcommand)]
+enum EntityCommand {
+    /// List metadata in canonical ID order, optionally filtering active types or missing identifiers.
+    List {
+        #[arg(long = "type")]
+        entity_type: Option<String>,
+        #[arg(long)]
+        missing_identifier: Option<String>,
+        /// Resume strictly after this canonical entity ID.
+        #[arg(long)]
+        after: Option<String>,
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+    },
+    /// Resolve an exact canonical name/alias, scheme/value identifier, or entity ID; ambiguity is an error.
+    Resolve {
+        #[arg(long, required_unless_present_any = ["scheme", "id"], conflicts_with_all = ["scheme", "value", "id"])]
+        name: Option<String>,
+        #[arg(long, requires = "value", conflicts_with_all = ["name", "id"])]
+        scheme: Option<String>,
+        #[arg(long, requires = "scheme")]
+        value: Option<String>,
+        #[arg(long, conflicts_with_all = ["name", "scheme", "value"])]
+        id: Option<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -228,18 +279,23 @@ fn execute_command(
                 query,
                 row_limit,
                 timeout_ms,
-            } => Ok(CommandResponse::new(
-                "graph.query",
-                "complete",
-                CommandResult::GraphQuery(graph::query(
+                document_scope,
+            } => {
+                let result = graph::query(
                     &config.store,
                     &query,
                     crate::graph::QueryConfig {
                         row_limit,
                         timeout: std::time::Duration::from_millis(timeout_ms),
                     },
-                )?),
-            )),
+                )?;
+                let result = if let Some(column) = document_scope {
+                    CommandResult::DocumentScope(result.document_scope(&column)?)
+                } else {
+                    CommandResult::GraphQuery(result)
+                };
+                Ok(CommandResponse::new("graph.query", "complete", result))
+            }
             GraphCommand::Rebuild => Ok(CommandResponse::new(
                 "graph.rebuild",
                 "complete",
@@ -251,31 +307,102 @@ fn execute_command(
             query,
             must_contain,
             since,
+            until,
+            scope,
+            grouped,
+            describe_scope,
             source_types,
             limit,
         } => {
+            if describe_scope {
+                return Ok(CommandResponse::new(
+                    "search.describe_scope",
+                    "complete",
+                    CommandResult::Description(input::describe_scope()?),
+                ));
+            }
+            let request = crate::domain::search::SearchRequest {
+                query: query.ok_or_else(|| {
+                    crate::CommonplaceError::InvalidInput("search query is required".into())
+                })?,
+                must_contain,
+                since,
+                until,
+                scope: scope.as_deref().map(input::read_scope).transpose()?,
+                source_types,
+                limit,
+            };
             let mut embedding = crate::providers::embeddings::LocalEmbeddingModel::new(
                 config.model_cache.clone(),
                 1,
             );
             let mut reranker = crate::providers::reranker::LocalReranker::new(config.model_cache);
+            let result =
+                crate::app::search::search(&config.store, &request, &mut embedding, &mut reranker)?;
             Ok(CommandResponse::new(
                 "search",
                 "complete",
-                CommandResult::Search(crate::app::search::search(
-                    &config.store,
-                    &crate::domain::search::SearchRequest {
-                        query,
-                        must_contain,
-                        since,
-                        source_types,
-                        limit,
-                    },
-                    &mut embedding,
-                    &mut reranker,
-                )?),
+                if grouped {
+                    CommandResult::GroupedSearch(result.grouped())
+                } else {
+                    CommandResult::Search(result)
+                },
             ))
         }
+        Command::Entity { command } => match command {
+            EntityCommand::List {
+                entity_type,
+                missing_identifier,
+                after,
+                limit,
+            } => Ok(CommandResponse::new(
+                "entity.list",
+                "complete",
+                CommandResult::Entities(crate::app::entity::list(
+                    &config.store,
+                    entity_type.as_deref(),
+                    missing_identifier.as_deref(),
+                    after.as_deref(),
+                    limit,
+                )?),
+            )),
+            EntityCommand::Resolve {
+                name,
+                scheme,
+                value,
+                id,
+            } => {
+                let reference = if let Some(id) = id {
+                    crate::domain::knowledge::EntityReference::Id { id }
+                } else if let Some(name) = name {
+                    crate::domain::knowledge::EntityReference::Name {
+                        name: crate::domain::knowledge::IdentityText(name),
+                    }
+                } else {
+                    crate::domain::knowledge::EntityReference::Identifier {
+                        identifier: crate::domain::knowledge::Identifier {
+                            scheme: crate::domain::schema::Name(scheme.ok_or_else(|| {
+                                crate::CommonplaceError::InvalidInput(
+                                    "identifier scheme is required".into(),
+                                )
+                            })?),
+                            value: crate::domain::knowledge::IdentityText(value.ok_or_else(
+                                || {
+                                    crate::CommonplaceError::InvalidInput(
+                                        "identifier value is required".into(),
+                                    )
+                                },
+                            )?),
+                        },
+                    }
+                };
+                Ok(CommandResponse::new(
+                    "entity.resolve",
+                    "complete",
+                    CommandResult::Entity(crate::app::entity::resolve(&config.store, &reference)?),
+                ))
+            }
+        },
         Command::Record(args) => record::execute(&config.store, args),
         Command::Remove(args) => remove::execute(&config.store, args),
         Command::Withdraw(args) => withdraw::execute(&config.store, args),
@@ -365,7 +492,17 @@ impl Command {
             Self::Init => "init",
             Self::Ingest(args) if args.describe => "ingest.describe",
             Self::Ingest(_) => "ingest",
+            Self::Search {
+                describe_scope: true,
+                ..
+            } => "search.describe_scope",
             Self::Search { .. } => "search",
+            Self::Entity {
+                command: EntityCommand::List { .. },
+            } => "entity.list",
+            Self::Entity {
+                command: EntityCommand::Resolve { .. },
+            } => "entity.resolve",
             Self::Get { .. } => "get",
             Self::Record(args) if args.describe => "record.describe",
             Self::Record(_) => "record",

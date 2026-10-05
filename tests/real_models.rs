@@ -12,6 +12,180 @@ use serde_json::{Value, json};
 use common::Store;
 
 #[test]
+#[ignore = "requires prepared pinned COMMONPLACE_MODEL_CACHE; local synthetic CLI acceptance, never downloads or skips"]
+fn real_model_scoped_discovery_offline() {
+    let cache = PathBuf::from(
+        std::env::var_os("COMMONPLACE_MODEL_CACHE")
+            .expect("set COMMONPLACE_MODEL_CACHE to prepared pinned models"),
+    );
+    let store = Store::new();
+    let execute = |args: &[&str]| -> Value {
+        let output = store
+            .command()
+            .env("COMMONPLACE_MODEL_CACHE", &cache)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stderr.is_empty());
+        serde_json::from_slice(&output.stdout).unwrap()
+    };
+    store.apply(
+        &json!({"entity_types":[{"name":"organization"}],
+        "identifier_schemes":[{"name":"account"}]}),
+        false,
+    );
+    let mut documents = (0..70).map(|i| json!({
+        "source_key":format!("outside-{i}"),"text":"Modernization risk. Next action: reduce upgrade and delivery risks.",
+        "source_type":"note","temporal_state":"dated","occurred_at":"2026-10-01T00:00:00Z"
+    })).collect::<Vec<_>>();
+    documents.extend([
+        json!({"source_key":"selected-a","text":"Synthetic organization modernization risk: resource allocation. Next action: confirm owner.",
+            "source_type":"note","temporal_state":"dated","occurred_at":"2026-10-01T00:00:00.000000001Z"}),
+        json!({"source_key":"selected-b","text":"Synthetic organization modernization risk: testing delays. Next action: validate rollout.",
+            "source_type":"recap","temporal_state":"timeless"}),
+    ]);
+    let jsonl = store.directory.path().join("synthetic.jsonl");
+    std::fs::write(
+        &jsonl,
+        documents
+            .iter()
+            .map(Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+    .unwrap();
+    let added = execute(&["ingest", "--jsonl", jsonl.to_str().unwrap()]);
+    assert_eq!(added["result"]["summary"]["added"], 72);
+    let old_passage = added["result"]["items"][70]["passage_ids"][0].clone();
+    let path = store.input(&json!({"items":[
+        {"kind":"entity","ref":"org","name":"Synthetic Organization","aliases":["Synthetic"],
+            "identifiers":[{"scheme":"account","value":"opaque/001"}]},
+        {"kind":"type_membership","entity":{"ref":"org"},"entity_type":"organization",
+            "support":[{"passage_id":old_passage},{"passage_id":added["result"]["items"][71]["passage_ids"][0]}]}
+    ]}));
+    execute(&["record", path.to_str().unwrap()]);
+    assert_eq!(
+        execute(&["entity", "resolve", "--name", "Synthetic"])["result"]["entity_id"],
+        "entity:1"
+    );
+    assert_eq!(
+        execute(&[
+            "entity",
+            "list",
+            "--type",
+            "organization",
+            "--missing-identifier",
+            "account"
+        ])["result"]["items"],
+        json!([])
+    );
+    let query = "PREFIX c:<urn:commonplace:property:> SELECT DISTINCT ?document WHERE {
+        ?e c:name \"Synthetic Organization\" .
+        ?k c:subject ?e; c:evidence ?p . ?p c:revision ?r . ?r c:document ?document
+    } ORDER BY ?document";
+    let selection = execute(&["graph", "query", query, "--document-scope", "document"]);
+    let scope = store.directory.path().join("scope.json");
+    std::fs::write(&scope, serde_json::to_vec(&selection["result"]).unwrap()).unwrap();
+    assert_eq!(
+        selection["result"]["document_ids"],
+        json!(["doc:71", "doc:72"])
+    );
+    let search = execute(&[
+        "search",
+        "modernization risks next actions",
+        "--scope",
+        scope.to_str().unwrap(),
+        "--limit",
+        "50",
+    ]);
+    let items = search["result"]["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2);
+    assert!(
+        items
+            .iter()
+            .all(|item| item["document_id"] == "doc:71" || item["document_id"] == "doc:72")
+    );
+    assert_eq!(search["result"]["scope"]["eligible_sources"], 2);
+    for item in items {
+        let mut exact = execute(&["get", item["passage_id"].as_str().unwrap()])["result"].clone();
+        exact.as_object_mut().unwrap().remove("kind");
+        exact["rank"] = item["rank"].clone();
+        assert_eq!(item, &exact);
+    }
+    let grouped = execute(&[
+        "search",
+        "modernization risks next actions",
+        "--scope",
+        scope.to_str().unwrap(),
+        "--since",
+        "2026-10-01T00:00:00.000000001Z",
+        "--until",
+        "2026-09-30T19:00:00.000000001-05:00",
+        "--grouped",
+    ]);
+    assert_eq!(grouped["result"]["groups"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        grouped["result"]["temporal_filter"]["coverage"],
+        json!({"eligible_dated":1,"timeless":1,"older_dated":0,"newer_dated":0,"excluded_unknown":0})
+    );
+    let mut command = store.command();
+    command.env("COMMONPLACE_MODEL_CACHE", &cache).args([
+        "search",
+        "modernization",
+        "--scope",
+        "-",
+        "--source-type",
+        "note",
+        "--must-contain",
+        "allocation",
+    ]);
+    let piped = common::with_stdin(command, &serde_json::to_vec(&selection["result"]).unwrap());
+    assert!(piped.status.success(), "{piped:?}");
+    let piped: Value = serde_json::from_slice(&piped.stdout).unwrap();
+    assert_eq!(piped["result"]["items"].as_array().unwrap().len(), 1);
+    std::fs::write(&scope, r#"{"document_ids":[],"truncated":false}"#).unwrap();
+    let empty = execute(&[
+        "search",
+        "modernization",
+        "--scope",
+        scope.to_str().unwrap(),
+        "--grouped",
+    ]);
+    assert_eq!(empty["result"]["groups"], json!([]));
+    assert_eq!(empty["result"]["scope"]["eligible_passages"], 0);
+    let models: Value =
+        serde_json::from_str(include_str!("../spikes/rust-packaging/models.json")).unwrap();
+    let embedding_only = store.directory.path().join("embedding-only");
+    for file in models[0]["files"].as_array().unwrap() {
+        let name = file[0].as_str().unwrap();
+        let destination = embedding_only.join(EMBEDDING_REVISION).join(name);
+        std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        std::fs::hard_link(cache.join(EMBEDDING_REVISION).join(name), destination).unwrap();
+    }
+    let failure = store
+        .command()
+        .env("COMMONPLACE_MODEL_CACHE", embedding_only)
+        .args([
+            "search",
+            "modernization",
+            "--scope",
+            scope.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&failure.stderr).unwrap()["error"]["code"],
+        "model_unavailable"
+    );
+    assert!(failure.stdout.is_empty());
+}
+
+#[test]
 #[ignore = "requires prepared pinned COMMONPLACE_MODEL_CACHE; explicitly run offline, never downloads or skips"]
 fn real_model_search_offline() {
     let cache = PathBuf::from(
