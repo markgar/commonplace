@@ -144,11 +144,11 @@ fn concurrent_public_read_commands_share_wal_without_busy_conflicts() {
              VALUES ('synthetic', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
              INSERT INTO document_revisions(
                  document_id, revision_number, revision_digest, text, title,
-                 source_type, occurred_at, metadata_json, created_at
+                 source_type, temporal_state, occurred_at, metadata_json, created_at
              ) VALUES (
                  1, 1,
                  '0000000000000000000000000000000000000000000000000000000000000000',
-                 'alpha beta gamma delta', 'Synthetic', 'test', NULL, '{}',
+                 'alpha beta gamma delta', 'Synthetic', 'test', 'unknown', NULL, '{}',
                  '2026-01-01T00:00:00Z'
              );
              INSERT INTO passages(revision_id, ordinal, start_byte, end_byte, text)

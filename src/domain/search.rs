@@ -121,4 +121,27 @@ pub struct SearchItem {
 pub struct SearchResult {
     pub items: Vec<SearchItem>,
     pub truncated: bool,
+    pub temporal_filter: Option<TemporalFilter>,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize)]
+pub struct TemporalCoverage {
+    pub eligible_dated: usize,
+    pub timeless: usize,
+    pub older_dated: usize,
+    pub excluded_unknown: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TemporalDiagnostic {
+    pub code: &'static str,
+    pub message: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TemporalFilter {
+    pub since: String,
+    pub includes_timeless: bool,
+    pub coverage: TemporalCoverage,
+    pub diagnostics: Vec<TemporalDiagnostic>,
 }

@@ -1,6 +1,8 @@
 use std::path::Path;
 
-use crate::domain::search::{RERANK_LIMIT, SearchItem, SearchRequest, SearchResult, fuse};
+use crate::domain::search::{
+    RERANK_LIMIT, SearchItem, SearchRequest, SearchResult, TemporalDiagnostic, TemporalFilter, fuse,
+};
 use crate::providers::embeddings::{EMBEDDING_IDENTITY, EmbeddingModel, validate_vectors};
 use crate::providers::reranker::Reranker;
 use crate::storage::{database::SqliteDatabase, evidence, search};
@@ -16,6 +18,23 @@ pub fn search(
     let session = SqliteDatabase::read(root)?;
     let connection = session.connection();
     search::validate_representation(connection)?;
+    let temporal_filter = filters.since.as_ref().map(|since| {
+        let coverage = search::temporal_coverage(connection, &filters)?;
+        let diagnostics = if coverage.excluded_unknown == 0 {
+            Vec::new()
+        } else {
+            vec![TemporalDiagnostic {
+                code: "unknown_dates_excluded",
+                message: "Sources with unknown event dates are excluded by --since; results do not cover those sources.",
+            }]
+        };
+        Ok::<_, CommonplaceError>(TemporalFilter {
+            since: since.clone(),
+            includes_timeless: true,
+            coverage,
+            diagnostics,
+        })
+    }).transpose()?;
     if embedding.identity() != EMBEDDING_IDENTITY {
         return Err(CommonplaceError::ModelUnavailable(
             "search requires the store's pinned embedding identity".into(),
@@ -58,5 +77,9 @@ pub fn search(
             evidence,
         })
         .collect();
-    Ok(SearchResult { items, truncated })
+    Ok(SearchResult {
+        items,
+        truncated,
+        temporal_filter,
+    })
 }

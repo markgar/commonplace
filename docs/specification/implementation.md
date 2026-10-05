@@ -113,6 +113,7 @@ validation runs, not the supported release targets or required release evidence.
 | [P0 (#11)](https://github.com/markgar/commonplace/issues/11) | Agree the first execution boundaries and unresolved decisions | Baseline inspection | Integrator |
 | [P1 (#12)](https://github.com/markgar/commonplace/issues/12) | Apply and inspect vocabulary in a safely opened store | P0 | Shared start, then knowledge lane |
 | [P1f (#47)](https://github.com/markgar/commonplace/issues/47) | Permanently freeze one initialized store's current vocabulary | Integrated P1 schema path | Knowledge lane follow-on |
+| [Temporal intent (#53)](https://github.com/markgar/commonplace/issues/53) | Explicit source temporal state and honest since-search coverage | Integrated P3, P4, P9 and graph projection; approved fresh /3 stores | Source/search follow-on |
 | [P2 (#13)](https://github.com/markgar/commonplace/issues/13) | Prove the selected inference and graph components work together | P0 | Bounded runtime work |
 | [P3 (#15)](https://github.com/markgar/commonplace/issues/15) | Ingest files and read exact, revisioned evidence | P1, P2 inference gate | Source lane |
 | [P4 (#19)](https://github.com/markgar/commonplace/issues/19) | Search current evidence through the complete hybrid pipeline | P3 | Source lane |
@@ -586,7 +587,7 @@ automation remains deterministic.
 **Work:** specify and implement `commonplace-user-config/1` as a read-only,
 optional, standard-location file with independently optional absolute `store`
 and `model_cache` fields. Keep it strictly separate from store-local
-`commonplace-config/2`. Resolve store by `--store`, `COMMONPLACE_STORE`, user
+`commonplace-config/3`. Resolve store by `--store`, `COMMONPLACE_STORE`, user
 file, then `.commonplace`; resolve strict model cache by `--model-cache`,
 `COMMONPLACE_MODEL_CACHE`, user file, then the existing stock runtime behavior.
 Add read-only JSON `config show` with value-source reporting. Existing malformed
@@ -615,6 +616,43 @@ so a developer's real file cannot affect ordinary or real-model assertions.
 Existing explicit store/model tests remain unchanged in meaning. Packaging and
 documentation point to persistent user/store locations without modifying a
 real home during package construction or validation.
+
+### 3.14a Explicit temporal intent follow-on
+
+**Outcome:** ingestion requires explicit dated/timeless/unknown state without an
+importer convention; since-search distinguishes recent evidence from timeless
+context and discloses unknown-date coverage gaps.
+
+**Work:** require `--temporal-state` for files/scans/stdin and `temporal_state` in
+every JSONL record, with generated conditional input schemas/help and actionable
+validation before publication. Dated requires normalized RFC3339 occurred_at;
+timeless and unknown omit it. State participates in revision matching/digests,
+authoritative evidence and cited-revision RDF. Both SQL candidate paths apply
+dated-inclusive-cutoff OR timeless before candidate limits. Return normalized
+cutoff and source-type-scoped current-source four-bucket coverage counts plus
+unknown-date diagnostics even with nonempty/empty/zero-limit results.
+
+**Approved compatibility:** create fresh commonplace-store/3/config/3 stores,
+reject every /2 store without mutation, and require caller-controlled reingestion.
+No conversion, null inference, migration, deletion or reingestion automation.
+Source reingestion does not transfer prior citation IDs or authored knowledge.
+Existing user configuration and schema-freeze formats remain unchanged.
+
+**Acceptance:** valid states in every mode; omitted/null/invalid/inconsistent
+input fails without document/revision/index publication and preserves independent
+batch outcomes. Real SQLite/FTS5/sqlite-vec prove filter parity before limits,
+inclusive nanosecond/offset thresholds, timeless inclusion and unknown exclusion.
+Counts cover current documents, including empty/multipassage/revised sources,
+not query matches or candidates. Exact historical get/support and real Oxigraph
+rebuild preserve cited state/time after temporal-only revisions; same-key reruns
+retain identity/idempotence. Old stores fail closed without authoritative/config/
+graph mutation or new application lock state. Follow ordinary local checks and
+independent review gates, not platform packaging or Actions.
+
+**Boundary:** no filename/frontmatter extraction, importer/skill changes, backfill,
+new providers/dependencies/frameworks or query-debug system. Sibling search-quality
+work owns passage preparation and must-contain; combined integration must preserve
+its shared candidate predicate without duplicating its implementation here.
 
 ### 3.15 Packet delivery and integration rules
 
@@ -681,7 +719,7 @@ The architecture fixes one implementation of each item below rather than
 supporting runtime alternatives. Their concrete values are selected and
 verified during the packaging and retrieval slices. Durable representation
 choices are pinned by the store format; P4 completes the initial query policy
-without changing the version-2 persisted representation:
+without changing the version-3 persisted representation:
 
 - embedding model and runtime;
 - embedding dimensions and normalization;
@@ -750,7 +788,7 @@ Decision ownership and deadlines:
 P5a's approved operational defaults are 1000 retained rows (`--row-limit`, with
 zero allowed) and 5000 ms (`--timeout-ms`, positive) for cooperative evaluation
 cancellation. Product section 8 owns their CLI behavior; they do not add fields
-to the version-2 configuration. Acceptance covers zero/at/above row bounds,
+to the version-3 configuration. Acceptance covers zero/at/above row bounds,
 overflow rejection, native lazy consumption, execution/iteration cancellation,
 and prompt timer teardown.
 

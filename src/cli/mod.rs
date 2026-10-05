@@ -55,7 +55,7 @@ enum Command {
     Search {
         /// Plain text, not FTS syntax (maximum 4096 UTF-8 bytes and 64 terms).
         query: String,
-        /// Inclusive source time (RFC3339); excludes sources without a time.
+        /// Inclusive dated source cutoff (RFC3339), plus timeless context; excludes unknown dates and reports coverage.
         #[arg(long)]
         since: Option<String>,
         /// Exact source type; repeat to match any supplied type.
@@ -488,7 +488,12 @@ mod tests {
             .unwrap()
         };
         run(&["init"]);
-        let ingested = run(&["ingest", source.to_str().unwrap()]);
+        let ingested = run(&[
+            "ingest",
+            "--temporal-state",
+            "unknown",
+            source.to_str().unwrap(),
+        ]);
         let super::CommandResult::Ingest(ingested) = ingested.result else {
             panic!("ingest");
         };

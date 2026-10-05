@@ -50,6 +50,7 @@ fn ingest(store: &Store, key: &str, text: &str) -> Value {
                 title: None,
                 source_type: "test".into(),
                 occurred_at: None,
+                temporal_state: commonplace::domain::documents::TemporalState::Unknown,
                 metadata: Default::default(),
             }),
         }]
@@ -426,13 +427,23 @@ fn file_keys_and_directory_absence_do_not_remove_or_touch_original_files() {
     let second = directory.join("second.md");
     std::fs::write(&first, "").unwrap();
     std::fs::write(&second, "").unwrap();
-    let added = store.success(&["ingest", directory.to_str().unwrap()]);
+    let added = store.success(&[
+        "ingest",
+        "--temporal-state",
+        "unknown",
+        directory.to_str().unwrap(),
+    ]);
     let doc = added["result"]["items"][0]["document_id"].as_str().unwrap();
     let before = store.success(&["get", doc]);
     let key = before["result"]["source_key"].as_str().unwrap();
     assert!(key.starts_with("file://"));
     std::fs::remove_file(&first).unwrap();
-    store.success(&["ingest", directory.to_str().unwrap()]);
+    store.success(&[
+        "ingest",
+        "--temporal-state",
+        "unknown",
+        directory.to_str().unwrap(),
+    ]);
     assert_eq!(store.success(&["get", doc]), before);
     store.success(&["remove", "--source-key", key]);
     store.failure(&["get", doc], "not_found", 2);

@@ -280,6 +280,13 @@ revisions, skips unchanged documents, prepares passages, and publishes each
 changed document in its own SQLite transaction. Embedding uses bounded batches;
 combining passages from multiple documents is an optional optimization.
 
+Every adapter carries explicit typed temporal intent into DocumentInput.
+Normalization rejects dated inputs without valid RFC3339 occurred_at and
+timeless/unknown inputs with a timestamp before preparing or publishing them.
+File/stdin shared options validate before reading inputs; JSONL raw records use
+the generated conditional schema and preserve per-record failures. Adapters
+never infer temporal state or event time from content or operational timestamps.
+
 A malformed JSON Lines record or source key repeated earlier in the same stream
 is a failed item. It does not roll back documents already published by that
 command. Generic stdin/JSON Lines readers accept caller-normalized text; they
@@ -314,6 +321,14 @@ search_documents(context, query)
 The workflow obtains lexical and vector candidates in one read session, fuses
 and deduplicates them, reranks a bounded set, and hydrates exact evidence before
 returning results.
+
+With since, both SQL candidate paths admit dated current revisions at/after the
+normalized inclusive cutoff plus timeless context and exclude unknown dates,
+before their limits. An aggregate query in the same read snapshot counts current
+sources after source-type filters into four temporal coverage buckets. The response
+includes those counts, the effective cutoff and explicit unknown-date coverage
+diagnostics even with nonempty results. Hydrated citations retain the immutable
+revision's typed temporal state through get, knowledge support and RDF projection.
 
 ### 6.4 Apply schema
 

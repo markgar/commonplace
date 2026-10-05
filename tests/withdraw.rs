@@ -43,6 +43,7 @@ fn evidence(store: &Store, text: &str) -> Value {
                 title: None,
                 source_type: "test".into(),
                 occurred_at: None,
+                temporal_state: commonplace::domain::documents::TemporalState::Unknown,
                 metadata: Default::default(),
             }),
         }]

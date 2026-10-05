@@ -2,6 +2,7 @@ use rusqlite::{Connection, Row, params};
 
 use super::database::storage_error;
 use super::knowledge;
+use crate::domain::documents::TemporalState;
 use crate::domain::knowledge::FactObject;
 use crate::{CommonplaceError, Result};
 
@@ -66,6 +67,7 @@ pub(crate) enum SnapshotRecord {
         number: i64,
         digest: String,
         source_type: String,
+        temporal_state: TemporalState,
         metadata: String,
         title: Option<String>,
         occurred_at: Option<String>,
@@ -244,14 +246,19 @@ impl<'a> GraphSnapshot<'a> {
             }, &mut emit)?;
         self.pages(
             "SELECT revision_id, document_id, revision_number, revision_digest, source_type,
-                    metadata_json, title, occurred_at FROM document_revisions
+                    metadata_json, title, occurred_at, temporal_state FROM document_revisions
              WHERE revision_id>?1 AND revision_id IN (
                  SELECT revision_id FROM passages WHERE passage_id IN (SELECT passage_id FROM cited))
              ORDER BY revision_id LIMIT ?2",
-            |r| Ok(SnapshotRecord::Revision {
+            |r| {
+                let occurred_at: Option<String> = r.get(7)?;
+                let state: String = r.get(8)?;
+                let temporal_state = super::evidence::decode_temporal_state(&state, occurred_at.as_deref())
+                    .map_err(|error| rusqlite::Error::FromSqlConversionFailure(8, rusqlite::types::Type::Text, Box::new(error)))?;
+                Ok(SnapshotRecord::Revision {
                 id:r.get(0)?, document:r.get(1)?, number:r.get(2)?, digest:r.get(3)?,
-                source_type:r.get(4)?, metadata:r.get(5)?, title:r.get(6)?, occurred_at:r.get(7)?,
-            }), &mut emit)?;
+                source_type:r.get(4)?, temporal_state, metadata:r.get(5)?, title:r.get(6)?, occurred_at,
+            })}, &mut emit)?;
         self.pages(
             "SELECT document_id, source_key FROM documents
              WHERE document_id>?1 AND document_id IN (

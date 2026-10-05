@@ -17,7 +17,7 @@ fn binary_preserves_init_contract_and_existing_store() {
             "status": "unchanged",
             "result": {
                 "path": store.root,
-                "format": "commonplace-store/2",
+                "format": "commonplace-store/3",
                 "created": false
             }
 

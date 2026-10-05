@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use serde_json::{Map, Value};
 
-use crate::domain::documents::DocumentInput;
+use crate::domain::documents::{DocumentInput, TemporalState};
 use crate::{CommonplaceError, Result};
 
 #[derive(Debug, Default)]
@@ -19,19 +19,9 @@ pub struct FileOptions {
 pub struct MetadataOverrides {
     pub title: Option<String>,
     pub source_type: String,
+    pub temporal_state: TemporalState,
     pub occurred_at: Option<String>,
     pub metadata: Map<String, Value>,
-}
-
-impl Default for MetadataOverrides {
-    fn default() -> Self {
-        Self {
-            title: None,
-            source_type: "file".into(),
-            occurred_at: None,
-            metadata: Map::new(),
-        }
-    }
 }
 
 pub struct FileItem {
@@ -233,6 +223,7 @@ pub fn read_file(
         text,
         title,
         source_type: metadata.source_type.clone(),
+        temporal_state: metadata.temporal_state,
         occurred_at: metadata.occurred_at.clone(),
         metadata: metadata.metadata.clone(),
     })

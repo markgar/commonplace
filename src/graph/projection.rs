@@ -214,6 +214,7 @@ fn project(snapshot: &GraphSnapshot<'_>, mut emit: impl FnMut(Quad) -> Result<()
                 number,
                 digest,
                 source_type,
+                temporal_state,
                 metadata,
                 title,
                 occurred_at,
@@ -228,6 +229,10 @@ fn project(snapshot: &GraphSnapshot<'_>, mut emit: impl FnMut(Quad) -> Result<()
                 put(
                     P::SourceType,
                     Literal::new_simple_literal(source_type).into(),
+                )?;
+                put(
+                    P::TemporalState,
+                    Literal::new_simple_literal(temporal_state.as_str()).into(),
                 )?;
                 put(
                     P::MetadataJson,

@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
@@ -8,12 +9,58 @@ use time::{OffsetDateTime, UtcOffset, format_description::well_known::Rfc3339};
 use super::ids::{DocumentId, PassageId, RevisionId};
 use crate::{CommonplaceError, Result};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TemporalState {
+    Dated,
+    Timeless,
+    Unknown,
+}
+
+impl TemporalState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Dated => "dated",
+            Self::Timeless => "timeless",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    pub fn validate(self, occurred_at: Option<&str>) -> Result<()> {
+        match (self, occurred_at) {
+            (Self::Dated, None) => Err(CommonplaceError::InvalidInput(
+                "dated temporal_state requires occurred_at (CLI: --occurred-at) as an RFC3339 timestamp".into(),
+            )),
+            (Self::Timeless | Self::Unknown, Some(_)) => Err(CommonplaceError::InvalidInput(
+                format!("{} temporal_state prohibits occurred_at; omit the timestamp or choose dated", self.as_str()),
+            )),
+            _ => Ok(()),
+        }
+    }
+}
+
+impl std::str::FromStr for TemporalState {
+    type Err = CommonplaceError;
+
+    fn from_str(value: &str) -> Result<Self> {
+        match value {
+            "dated" => Ok(Self::Dated),
+            "timeless" => Ok(Self::Timeless),
+            "unknown" => Ok(Self::Unknown),
+            _ => Err(CommonplaceError::InvalidInput(
+                "temporal_state must be dated (known event time), timeless (event time does not apply), or unknown (event time unavailable)".into(),
+            )),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DocumentInput {
     pub source_key: String,
     pub text: String,
     pub title: Option<String>,
     pub source_type: String,
+    pub temporal_state: TemporalState,
     pub occurred_at: Option<String>,
     pub metadata: Map<String, Value>,
 }
@@ -30,6 +77,7 @@ impl DocumentInput {
                 "source_type must be nonempty and contain no NUL".into(),
             ));
         }
+        self.temporal_state.validate(self.occurred_at.as_deref())?;
         self.occurred_at = self
             .occurred_at
             .as_deref()
@@ -55,10 +103,11 @@ impl DocumentInput {
             }
         }
         let mut hash = Sha256::new();
-        hash.update(b"commonplace-revision/1\0");
+        hash.update(b"commonplace-revision/2\0");
         field(&mut hash, &self.text);
         optional(&mut hash, self.title.as_deref());
         field(&mut hash, &self.source_type);
+        field(&mut hash, self.temporal_state.as_str());
         optional(&mut hash, self.occurred_at.as_deref());
         field(&mut hash, &self.metadata_json()?);
         Ok(format!("{:x}", hash.finalize()))
@@ -135,6 +184,7 @@ pub struct DocumentRevision {
     pub text: String,
     pub title: Option<String>,
     pub source_type: String,
+    pub temporal_state: TemporalState,
     pub occurred_at: Option<String>,
     pub metadata: Map<String, Value>,
     pub created_at: String,
@@ -154,6 +204,7 @@ pub struct Evidence {
     pub text: String,
     pub title: Option<String>,
     pub source_type: String,
+    pub temporal_state: TemporalState,
     pub occurred_at: Option<String>,
     pub metadata: Map<String, Value>,
 }
@@ -204,6 +255,7 @@ mod tests {
             text: "\u{feff}A\r\n\0e\u{301}🦀".into(),
             title: None,
             source_type: "file".into(),
+            temporal_state: TemporalState::Dated,
             occurred_at: Some("2026-01-02T03:04:05+02:00".into()),
             metadata: json!({"z": [true, null], "a": i64::MIN})
                 .as_object()
@@ -216,7 +268,7 @@ mod tests {
         let digest = input.revision_digest().unwrap();
         assert_eq!(
             digest,
-            "edaa5c08dc8691fb99611f6ad06d3cf92eeb419f918726f7d7af892b26bd5795"
+            "da4b5982cfe0eac1a536247e06c02060faaf450e6032ded155f5baac1df5e400"
         );
         let mut changed = input.clone();
         changed.source_key = "other-key".into();
@@ -229,6 +281,12 @@ mod tests {
         changed = input.clone();
         changed.metadata.insert("new".into(), json!(true));
         assert_ne!(changed.revision_digest().unwrap(), digest);
+        changed = input.clone();
+        changed.occurred_at = None;
+        changed.temporal_state = TemporalState::Timeless;
+        let timeless = changed.revision_digest().unwrap();
+        changed.temporal_state = TemporalState::Unknown;
+        assert_ne!(changed.revision_digest().unwrap(), timeless);
         assert!(normalize_timestamp("not-time").is_err());
         assert_eq!(
             normalize_timestamp("2026-01-02T01:04:05.000Z").unwrap(),

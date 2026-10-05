@@ -156,7 +156,7 @@ release_dir=$(python3 -c \
 export COMMONPLACE_MODEL_CACHE="$release_dir/pinned-models"
 store="$HOME/.local/share/commonplace/stores/personal"
 commonplace --store "$store" init
-commonplace --store "$store" ingest /absolute/path/to/notes
+commonplace --store "$store" ingest /absolute/path/to/notes --temporal-state unknown
 commonplace --store "$store" search "release planning"
 ```
 
