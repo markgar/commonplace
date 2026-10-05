@@ -293,7 +293,7 @@ fn execute_command(
         Command::Schema {
             command: SchemaCommand::Freeze,
         } => {
-            let result = schema::freeze(&cli.store, &schema::OperationConfig::default())?;
+            let result = schema::freeze(&config.store, &schema::OperationConfig::default())?;
             let status = if result.created {
                 "complete"
             } else {

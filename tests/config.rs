@@ -181,6 +181,10 @@ fn configured_paths_do_not_act_until_the_owning_command_uses_them() {
     assert!(configured_store.join("config.json").is_file());
     assert!(!missing_models.exists());
 
+    let frozen = output_json(store.command_without_store().args(["schema", "freeze"]));
+    assert_eq!(frozen["result"]["frozen"], true);
+    assert!(configured_store.join("schema-freeze.json").is_file());
+
     let output = store
         .command_without_store()
         .args(["search", "needle", "--limit", "0"])
