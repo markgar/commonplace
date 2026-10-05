@@ -135,7 +135,10 @@ manual installation. It verifies that receipt's exact fields and HOME-relative
 paths, the stable executable hash, and the preserved manual release's sole
 executable before adopting it. The first verified archive update leaves the
 manual release untouched and replaces the stable executable and receipt with
-the canonical `commonplace-installed-release/1` state. Malformed, mismatched or
+the canonical `commonplace-installed-release/1` state. The old manual executable
+is checked against its original command surface, which predates `config`; the
+incoming package must provide the complete current command surface, including
+`config`. Malformed, mismatched or
 other legacy receipt formats fail closed; this is not a general migration
 framework.
 
