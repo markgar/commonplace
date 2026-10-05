@@ -654,6 +654,72 @@ reranker artifacts. Missing or corrupt files fail explicitly; this override
 never downloads or replaces anything. Corrupt ordinary cache hits also fail
 without automatic replacement. Unchanged and empty documents require no model.
 
+### Persistent user path defaults
+
+Commonplace can read one optional user file containing non-secret defaults for
+the persistent store and strict pinned-model cache:
+
+```json
+{
+  "format": "commonplace-user-config/1",
+  "store": "/absolute/path/to/persistent/store",
+  "model_cache": "/absolute/path/to/installed/pinned-models"
+}
+```
+
+The file is:
+
+- macOS: `$HOME/Library/Application Support/commonplace/config.json`
+- Linux/other Unix: `$XDG_CONFIG_HOME/commonplace/config.json`, or
+  `$HOME/.config/commonplace/config.json` when `XDG_CONFIG_HOME` is unset or
+  relative
+- Windows: `%APPDATA%\commonplace\config.json`
+
+`format` is required; `store` and `model_cache` are independently optional and
+must be absolute. Unknown or duplicate fields, malformed JSON, unsupported
+formats, relative paths, and unreadable files fail executing commands with
+`configuration_error` (exit 2), even when command-line or environment overrides
+are present. A missing file preserves existing behavior.
+
+Store precedence is `--store`, `COMMONPLACE_STORE`, user configuration, then
+`.commonplace`. Strict model-cache precedence is `--model-cache`,
+`COMMONPLACE_MODEL_CACHE`, user configuration, then the stock `hf-hub` cache.
+CLI/environment paths may remain relative to that invocation. Inspect the
+selection without opening a store or loading models:
+
+```sh
+commonplace config show
+```
+
+For example, a loaded file produces the common JSON envelope with:
+
+```json
+{
+  "config_file": {
+    "path": "/Users/example/Library/Application Support/commonplace/config.json",
+    "status": "loaded"
+  },
+  "store": {
+    "path": "/Users/example/.local/share/commonplace/stores/personal",
+    "source": "user_config"
+  },
+  "model_cache": {
+    "path": "/Users/example/.local/share/commonplace/releases/commonplace-0.1.0-0123456789ab-macos-arm64/pinned-models",
+    "source": "user_config"
+  }
+}
+```
+
+File status is `unavailable`, `absent`, or `loaded`. Value source is
+`command_line`, `environment`, `user_config`, `default`, or `runtime_default`;
+the last reports a null strict override so the stock model cache applies.
+
+This user file is not `<store>/config.json`. The latter is the backend-managed
+`commonplace-config/2` layout marker created by `init`. Commonplace does not
+write, migrate, repair, or profile user configuration. `config show` does not
+check path health. Only explicit `init` may create the selected store; a selected
+strict cache never downloads or falls back when artifacts are missing or corrupt.
+
 ## Development checks
 
 The manual [local macOS arm64 packaging procedure](docs/release-local.md) builds

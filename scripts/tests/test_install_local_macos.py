@@ -18,7 +18,7 @@ assert SPEC.loader is not None
 SPEC.loader.exec_module(installer)
 
 
-COMMANDS = ("init", "graph", "ingest", "search", "record", "remove",
+COMMANDS = ("config", "init", "graph", "ingest", "search", "record", "remove",
             "withdraw", "get", "schema")
 
 
@@ -26,8 +26,8 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def executable_text(version, marker):
-    commands = "".join(f"  {command} command\n" for command in COMMANDS)
+def executable_text(version, marker, commands=COMMANDS):
+    commands = "".join(f"  {command} command\n" for command in commands)
     return f"""#!/bin/sh
 # {marker}
 case "$1" in
@@ -171,6 +171,19 @@ class InstallerTests(unittest.TestCase):
 
     def pending_path(self):
         return self.home / ".local/share/commonplace/installed-release.pending.json"
+
+    def test_smoke_rejects_missing_config_command(self):
+        executable = self.root / "commonplace"
+        executable.write_text(
+            executable_text(
+                "0.1.0",
+                "missing-config",
+                tuple(command for command in COMMANDS if command != "config"),
+            )
+        )
+        executable.chmod(0o755)
+        with self.assertRaisesRegex(installer.InstallerError, "config"):
+            installer.smoke_executable(executable, "0.1.0")
 
     def test_first_install_idempotent_reinstall_and_verified_update(self):
         first, first_id = make_package(self.root / "first", commit_char="a")

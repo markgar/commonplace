@@ -23,6 +23,7 @@ PROVENANCE_FORMAT = "commonplace-package-provenance/1"
 RECEIPT_FORMAT = "commonplace-installed-release/1"
 TARGET = "aarch64-apple-darwin"
 TOP_LEVEL_COMMANDS = (
+    "config",
     "init",
     "graph",
     "ingest",

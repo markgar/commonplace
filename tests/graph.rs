@@ -95,12 +95,13 @@ fn init_schema_query_rebuild_reopen_and_unused_vocabulary() {
         json!([[literal(0, "integer")]])
     );
     let absent = store.directory.path().join("absent");
-    let output = Command::new(env!("CARGO_BIN_EXE_commonplace"))
-        .arg("--store")
-        .arg(&absent)
-        .args(["graph", "schema", "--json"])
-        .output()
-        .unwrap();
+    let output =
+        common::isolated_command(env!("CARGO_BIN_EXE_commonplace"), store.directory.path())
+            .arg("--store")
+            .arg(&absent)
+            .args(["graph", "schema", "--json"])
+            .output()
+            .unwrap();
     assert!(output.status.success());
     assert!(!absent.exists());
     let schema: Value = serde_json::from_slice(&output.stdout).unwrap();

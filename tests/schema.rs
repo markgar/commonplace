@@ -282,7 +282,7 @@ fn check_is_a_projection_and_does_not_change_store_files() {
 fn description_is_executable_and_never_opens_a_store() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("missing");
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_commonplace"))
+    let output = common::isolated_command(env!("CARGO_BIN_EXE_commonplace"), directory.path())
         .arg("--store")
         .arg(&root)
         .args(["schema", "apply", "--describe", "--json"])

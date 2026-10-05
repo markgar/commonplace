@@ -334,7 +334,7 @@ fn removes_all_revisions_retains_knowledge_unrelated_evidence_and_new_identity()
 fn descriptions_exact_keys_empty_sources_and_numeric_affected_order() {
     let directory = tempfile::tempdir().unwrap();
     let absent = directory.path().join("absent");
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_commonplace"))
+    let output = common::isolated_command(env!("CARGO_BIN_EXE_commonplace"), directory.path())
         .args([
             "--store",
             absent.to_str().unwrap(),
@@ -365,7 +365,7 @@ fn descriptions_exact_keys_empty_sources_and_numeric_affected_order() {
         vec!["remove", "input.json"],
     ] {
         assert!(
-            !std::process::Command::new(env!("CARGO_BIN_EXE_commonplace"))
+            !common::isolated_command(env!("CARGO_BIN_EXE_commonplace"), directory.path(),)
                 .args(args)
                 .output()
                 .unwrap()

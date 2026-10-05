@@ -337,12 +337,13 @@ fn invalid_late_ids_and_already_withdrawn_reject_before_any_mutation() {
 fn descriptions_and_input_limits_reject_invalid_requests_without_store() {
     let store = Store::new();
     let missing = store.directory.path().join("missing");
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_commonplace"))
-        .arg("--store")
-        .arg(&missing)
-        .args(["withdraw", "--describe", "--json"])
-        .output()
-        .unwrap();
+    let output =
+        common::isolated_command(env!("CARGO_BIN_EXE_commonplace"), store.directory.path())
+            .arg("--store")
+            .arg(&missing)
+            .args(["withdraw", "--describe", "--json"])
+            .output()
+            .unwrap();
     assert!(output.status.success(), "{output:?}");
     assert!(!missing.exists());
     let description: Value = serde_json::from_slice(&output.stdout).unwrap();
