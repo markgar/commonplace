@@ -20,6 +20,7 @@ SPEC.loader.exec_module(installer)
 
 COMMANDS = ("config", "init", "graph", "ingest", "search", "record", "remove",
             "withdraw", "get", "schema")
+MANUAL_COMMANDS = tuple(command for command in COMMANDS if command != "config")
 
 
 def digest(path):
@@ -49,13 +50,13 @@ esac
 
 def make_package(root, *, version="0.1.0", commit_char="a", executable_marker=None,
                  extra_file=False, extra_directory=False, missing_usage=False,
-                 bad_bundle_checksum=False):
+                 bad_bundle_checksum=False, commands=COMMANDS):
     commit = commit_char * 40
     release_id = f"commonplace-{version}-{commit[:12]}-macos-arm64"
     bundle = root / release_id
     (bundle / "pinned-models" / "revision").mkdir(parents=True)
     executable = bundle / "commonplace"
-    executable.write_text(executable_text(version, executable_marker or commit))
+    executable.write_text(executable_text(version, executable_marker or commit, commands))
     executable.chmod(0o755)
     (bundle / "Cargo.lock").write_text("lock\n")
     (bundle / "models.json").write_text("[]\n")
@@ -100,14 +101,14 @@ def make_custom_archive(root, release_id, members):
     return archive
 
 
-def make_manual_install(home, *, mutate=None):
+def make_manual_install(home, *, mutate=None, commands=MANUAL_COMMANDS):
     version = "0.1.0"
     source_commit = "4ec9039fe77a050917d1745568c69c9163fd098a"
     release_id = f"commonplace-{version}-{source_commit[:12]}-manual-macos-arm64"
     release = home / ".local/share/commonplace/releases" / release_id
     release.mkdir(parents=True)
     release_executable = release / "commonplace"
-    release_executable.write_text(executable_text(version, source_commit))
+    release_executable.write_text(executable_text(version, source_commit, commands))
     release_executable.chmod(0o555)
     stable = home / ".local/bin/commonplace"
     stable.parent.mkdir(parents=True)
@@ -551,6 +552,37 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(stable.read_bytes(), stable_before)
         self.assertEqual(receipt_path.read_bytes(), receipt_before)
         self.assertTrue(manual_release.is_dir())
+
+    def test_manual_adoption_rejects_missing_existing_command(self):
+        _, _, stable, receipt_path = make_manual_install(
+            self.home,
+            commands=tuple(command for command in MANUAL_COMMANDS if command != "search"),
+        )
+        stable_before = stable.read_bytes()
+        receipt_before = receipt_path.read_bytes()
+        root = self.root / "package"
+        root.mkdir()
+        archive, _ = make_package(root)
+
+        with self.assertRaisesRegex(installer.InstallerError, "missing commands: search"):
+            self.install(archive)
+        self.assertEqual(stable.read_bytes(), stable_before)
+        self.assertEqual(receipt_path.read_bytes(), receipt_before)
+        self.assertFalse(self.pending_path().exists())
+
+    def test_manual_adoption_requires_config_in_incoming_package(self):
+        _, _, stable, receipt_path = make_manual_install(self.home)
+        stable_before = stable.read_bytes()
+        receipt_before = receipt_path.read_bytes()
+        root = self.root / "package"
+        root.mkdir()
+        archive, _ = make_package(root, commands=MANUAL_COMMANDS)
+
+        with self.assertRaisesRegex(installer.InstallerError, "missing commands: config"):
+            self.install(archive)
+        self.assertEqual(stable.read_bytes(), stable_before)
+        self.assertEqual(receipt_path.read_bytes(), receipt_before)
+        self.assertFalse(self.pending_path().exists())
 
     def test_manual_receipt_failure_retries_different_incoming_version(self):
         _, manual_release, stable, receipt_path = make_manual_install(self.home)

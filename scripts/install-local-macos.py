@@ -360,7 +360,11 @@ def verify_native_executable(executable: Path) -> None:
             f"package executable signature verification failed: {signature.stderr.strip()}")
 
 
-def smoke_executable(executable: Path, version: str) -> None:
+def smoke_executable(
+    executable: Path,
+    version: str,
+    commands: tuple[str, ...] = TOP_LEVEL_COMMANDS,
+) -> None:
     version_result = run_command([str(executable), "--version"])
     require(version_result.returncode == 0,
             f"installed executable --version failed: {version_result.stderr.strip()}")
@@ -369,7 +373,7 @@ def smoke_executable(executable: Path, version: str) -> None:
     help_result = run_command([str(executable), "--help"])
     require(help_result.returncode == 0,
             f"installed executable --help failed: {help_result.stderr.strip()}")
-    missing = [command for command in TOP_LEVEL_COMMANDS
+    missing = [command for command in commands
                if re.search(rf"(?m)^  {re.escape(command)}(?:\s|$)", help_result.stdout) is None]
     require(not missing, f"installed executable help is missing commands: {', '.join(missing)}")
 
@@ -859,7 +863,11 @@ def install_archive(
             if receipt["format"] == MANUAL_RECEIPT_FORMAT:
                 verify_manual_release(receipt, releases_root)
                 if state == "coherent":
-                    smoke_executable(executable, receipt["package_version"])
+                    smoke_executable(
+                        executable,
+                        receipt["package_version"],
+                        tuple(command for command in TOP_LEVEL_COMMANDS if command != "config"),
+                    )
             if state == "recover-update":
                 require(receipt["executable_sha256"] != incoming_executable_hash,
                         "installed receipt is inconsistent with its stable executable")
