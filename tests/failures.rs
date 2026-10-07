@@ -87,7 +87,7 @@ fn inaccessible_inputs_and_database_report_the_correct_boundary() {
     use std::os::unix::fs::PermissionsExt;
     let store = Store::new();
     let input = store.input(&json!({}));
-    std::fs::set_permissions(&input, std::fs::Permissions::from_mode(0)).unwrap();
+    std::fs::set_permissions(&input, std::fs::Permissions::from_mode(0o0)).unwrap();
     // Root and privileged test runners can read mode-000 files.
     if std::fs::File::open(&input).is_err() {
         for prefix in [
@@ -106,7 +106,7 @@ fn inaccessible_inputs_and_database_report_the_correct_boundary() {
     }
     std::fs::set_permissions(&input, std::fs::Permissions::from_mode(0o600)).unwrap();
     let database = store.root.join("commonplace.sqlite3");
-    std::fs::set_permissions(&database, std::fs::Permissions::from_mode(0)).unwrap();
+    std::fs::set_permissions(&database, std::fs::Permissions::from_mode(0o0)).unwrap();
     if std::fs::File::open(&database).is_err() {
         let error = store.failure(&["schema", "show"], "internal_error", 1);
         assert!(message(&error).contains("commonplace.sqlite3"));
