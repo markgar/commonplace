@@ -181,9 +181,7 @@ impl RecordInput {
             .map_err(|error| CommonplaceError::Storage(error.to_string()))?;
         validator
             .validate(&serde_json::to_value(self)?)
-            .map_err(|error| {
-                CommonplaceError::InvalidInput(format!("{}: {error}", error.instance_path))
-            })
+            .map_err(|error| CommonplaceError::validation(&error))
     }
 }
 
@@ -196,9 +194,7 @@ impl EntityReference {
             .map_err(|error| CommonplaceError::Storage(error.to_string()))?;
         validator
             .validate(&serde_json::to_value(self)?)
-            .map_err(|error| {
-                CommonplaceError::InvalidInput(format!("{}: {error}", error.instance_path))
-            })
+            .map_err(|error| CommonplaceError::validation(&error))
     }
 }
 

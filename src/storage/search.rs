@@ -84,7 +84,7 @@ pub fn scope_coverage(connection: &Connection, filters: &SearchFilters) -> Resul
     let missing_document_ids = statement
         .query_map([scope_json(filters)?], |row| row.get::<_, i64>(0))
         .map_err(storage_error)?
-        .map(|row| DocumentId::new(row.map_err(storage_error)?))
+        .map(|row| DocumentId::stored(row.map_err(storage_error)?))
         .collect::<Result<Vec<_>>>()?;
     let existing_sources = selected_sources - missing_document_ids.len();
     let source_types = serde_json::to_string(&filters.source_types)?;
@@ -251,7 +251,7 @@ fn select(
             |row| row.get::<_, i64>(0),
         )
         .map_err(storage_error)?
-        .map(|row| PassageId::new(row.map_err(storage_error)?))
+        .map(|row| PassageId::stored(row.map_err(storage_error)?))
         .collect::<Result<Vec<_>>>()?;
     let truncated = ids.len() > CANDIDATE_LIMIT;
     ids.truncate(CANDIDATE_LIMIT);

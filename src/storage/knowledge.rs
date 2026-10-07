@@ -37,7 +37,7 @@ pub fn resolve(
                 .optional()
                 .map_err(storage_error)?
                 .ok_or_else(|| CommonplaceError::NotFound("identifier does not resolve an entity".into()))?;
-            EntityId::new(id)?
+            EntityId::stored(id)?
         }
         EntityReference::Name { name } => {
             let ids = ids(
@@ -47,7 +47,7 @@ pub fn resolve(
                 &name.0,
             )?;
             match ids.as_slice() {
-                [id] => EntityId::new(*id)?,
+                [id] => EntityId::stored(*id)?,
                 [] => {
                     return Err(CommonplaceError::NotFound(format!(
                         "no entity matches name or alias {:?}",
@@ -94,7 +94,7 @@ pub fn create_entity(
         params![name, timestamp, created_by],
     )
     .map_err(storage_error)?;
-    EntityId::new(db.last_insert_rowid())
+    EntityId::stored(db.last_insert_rowid())
 }
 
 pub struct MetadataChange<'a> {
@@ -238,7 +238,7 @@ pub fn list_entities(
             |row| row.get::<_, i64>(0),
         )
         .map_err(storage_error)?
-        .map(|row| EntityId::new(row.map_err(storage_error)?))
+        .map(|row| EntityId::stored(row.map_err(storage_error)?))
         .collect()
 }
 
@@ -270,7 +270,7 @@ pub fn membership(
         params![schema_version, timestamp, created_by],
     )
     .map_err(storage_error)?;
-    let id = KnowledgeItemId::new(db.last_insert_rowid())?;
+    let id = KnowledgeItemId::stored(db.last_insert_rowid())?;
     db.execute(
         "INSERT INTO entity_type_memberships(knowledge_item_id,entity_id,entity_type_id) VALUES (?1,?2,?3)",
         params![id.value(), entity.value(), type_id],
@@ -285,7 +285,7 @@ pub fn membership(
         withdrawn_by: None,
         detail: KnowledgeDetail::TypeMembership {
             entity_id: entity,
-            entity_type_id: EntityTypeId::new(type_id)?,
+            entity_type_id: EntityTypeId::stored(type_id)?,
         },
         support: hydrated,
     })
@@ -366,7 +366,7 @@ pub fn fact(
         "INSERT INTO knowledge_items(kind,schema_version,created_at,created_by) VALUES ('fact',?1,?2,?3)",
         params![input.schema_version, input.timestamp, input.created_by],
     ).map_err(storage_error)?;
-    let id = KnowledgeItemId::new(db.last_insert_rowid())?;
+    let id = KnowledgeItemId::stored(db.last_insert_rowid())?;
     let (entity, literal) = match &object {
         FactObject::Entity { entity_id } => (Some(entity_id.value()), None),
         FactObject::Literal(value) => (None, Some(value.literal_json.as_str())),
@@ -386,7 +386,7 @@ pub fn fact(
         withdrawn_by: None,
         detail: KnowledgeDetail::Fact {
             subject_entity_id: input.subject,
-            predicate_id: PredicateId::new(predicate_id)?,
+            predicate_id: PredicateId::stored(predicate_id)?,
             object,
         },
         support: hydrated,
@@ -413,7 +413,7 @@ pub(crate) fn stored_object(
 ) -> Result<FactObject> {
     match (object_kind(kind)?, entity, literal) {
         (ObjectKind::Entity, Some(id), None) => Ok(FactObject::Entity {
-            entity_id: EntityId::new(id)?,
+            entity_id: EntityId::stored(id)?,
         }),
         (kind, None, Some(json)) if kind != ObjectKind::Entity => {
             Ok(FactObject::Literal(CanonicalLiteral::stored(kind, json)?))
@@ -461,7 +461,7 @@ fn invalid_endpoint_excluding(
     )
     .optional()
     .map_err(storage_error)?
-    .map(KnowledgeItemId::new)
+    .map(KnowledgeItemId::stored)
     .transpose()
 }
 
@@ -475,13 +475,8 @@ pub(crate) fn withdraw(
         .iter()
         .enumerate()
         .map(|(index, id)| {
-            let item = knowledge(db, *id).map_err(|error| {
-                let message = format!("knowledge_ids[{index}] ({id}): {error}");
-                match error {
-                    CommonplaceError::NotFound(_) => CommonplaceError::NotFound(message),
-                    _ => CommonplaceError::Storage(message),
-                }
-            })?;
+            let item = knowledge(db, *id)
+                .map_err(|error| error.context(format!("knowledge_ids[{index}] ({id})")))?;
             if item.withdrawn_at.is_some() {
                 return Err(CommonplaceError::InvalidInput(format!(
                     "knowledge_ids[{index}]: {id} is already withdrawn; inspect it with get"
@@ -552,7 +547,7 @@ pub fn entity(db: &Connection, id: EntityId) -> Result<Entity> {
         .map(|row| {
             let (scheme, name, value, created_at, created_by) = row.map_err(storage_error)?;
             Ok(EntityIdentifier {
-                identifier_scheme_id: IdentifierSchemeId::new(scheme)?,
+                identifier_scheme_id: IdentifierSchemeId::stored(scheme)?,
                 scheme: name,
                 value,
                 created_at,
@@ -570,15 +565,15 @@ pub fn entity(db: &Connection, id: EntityId) -> Result<Entity> {
         active_type_ids: ids(db,
             "SELECT DISTINCT entity_type_id FROM entity_type_memberships JOIN knowledge_items USING(knowledge_item_id)
              WHERE entity_id=?1 AND withdrawn_at IS NULL ORDER BY entity_type_id", id.value())?
-            .into_iter().map(EntityTypeId::new).collect::<Result<_>>()?,
+            .into_iter().map(EntityTypeId::stored).collect::<Result<_>>()?,
         active_type_membership_ids: ids(db,
             "SELECT knowledge_item_id FROM entity_type_memberships JOIN knowledge_items USING(knowledge_item_id)
              WHERE entity_id=?1 AND withdrawn_at IS NULL ORDER BY knowledge_item_id", id.value())?
-            .into_iter().map(KnowledgeItemId::new).collect::<Result<_>>()?,
+            .into_iter().map(KnowledgeItemId::stored).collect::<Result<_>>()?,
         active_fact_ids: ids(db,
             "SELECT knowledge_item_id FROM facts JOIN knowledge_items USING(knowledge_item_id)
              WHERE (subject_entity_id=?1 OR object_entity_id=?1) AND withdrawn_at IS NULL ORDER BY knowledge_item_id", id.value())?
-            .into_iter().map(KnowledgeItemId::new).collect::<Result<_>>()?,
+            .into_iter().map(KnowledgeItemId::stored).collect::<Result<_>>()?,
     })
 }
 
@@ -618,8 +613,8 @@ pub fn knowledge(db: &Connection, id: KnowledgeItemId) -> Result<Knowledge> {
     }
     let detail = match (entity, entity_type) {
         (Some(entity), Some(entity_type)) => KnowledgeDetail::TypeMembership {
-            entity_id: EntityId::new(entity)?,
-            entity_type_id: EntityTypeId::new(entity_type)?,
+            entity_id: EntityId::stored(entity)?,
+            entity_type_id: EntityTypeId::stored(entity_type)?,
         },
         _ => {
             let (subject, predicate, kind, entity, literal) = db.query_row(
@@ -630,15 +625,15 @@ pub fn knowledge(db: &Connection, id: KnowledgeItemId) -> Result<Knowledge> {
                     row.get::<_, Option<i64>>(3)?, row.get::<_, Option<String>>(4)?)),
             ).map_err(storage_error)?;
             KnowledgeDetail::Fact {
-                subject_entity_id: EntityId::new(subject)?,
-                predicate_id: PredicateId::new(predicate)?,
+                subject_entity_id: EntityId::stored(subject)?,
+                predicate_id: PredicateId::stored(predicate)?,
                 object: stored_object(&kind, entity, literal.as_deref())?,
             }
         }
     };
     let support: Vec<Evidence> = ids(db,
         "SELECT passage_id FROM knowledge_item_evidence WHERE knowledge_item_id=?1 ORDER BY passage_id",
-        id.value())?.into_iter().map(|passage| evidence::passage(db, PassageId::new(passage)?)).collect::<Result<_>>()?;
+        id.value())?.into_iter().map(|passage| evidence::passage(db, PassageId::stored(passage)?)).collect::<Result<_>>()?;
     Ok(Knowledge {
         knowledge_id: id,
         schema_version,
@@ -658,4 +653,30 @@ fn ids(db: &Connection, sql: &str, parameter: impl rusqlite::ToSql) -> Result<Ve
         .map_err(storage_error)?
         .collect::<rusqlite::Result<_>>()
         .map_err(storage_error)
+}
+
+#[cfg(test)]
+mod failure_tests {
+    use super::*;
+
+    #[test]
+    fn withdrawal_retains_real_sqlite_locked_read_category() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("test.sqlite3");
+        crate::storage::database::SqliteDatabase::initialize(&path).unwrap();
+        let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
+            | rusqlite::OpenFlags::SQLITE_OPEN_SHARED_CACHE;
+        let locker = Connection::open_with_flags(&path, flags).unwrap();
+        let reader = Connection::open_with_flags(&path, flags).unwrap();
+        locker
+            .execute_batch("BEGIN IMMEDIATE; UPDATE knowledge_items SET created_at=created_at;")
+            .unwrap();
+        let id = KnowledgeItemId::new(1).unwrap();
+        assert_eq!(knowledge(&reader, id).unwrap_err().code(), "conflict");
+        let error = withdraw(&reader, &[id], "2026-10-07T00:00:00Z", None).unwrap_err();
+        assert_eq!(error.code(), "conflict");
+        assert_eq!(error.exit_code(), 3);
+        assert!(error.to_string().contains("knowledge_ids[0] (knowledge:1)"));
+        locker.execute_batch("ROLLBACK").unwrap();
+    }
 }

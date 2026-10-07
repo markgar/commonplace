@@ -557,12 +557,16 @@ fn coordinated_build_activation_and_real_commit_failures_restore_old_state() {
         )
         .unwrap_err();
         if phase == PublishPhase::BeforeCommit {
+            assert_eq!(error.code(), "internal_error");
+            assert_eq!(error.exit_code(), 1);
+            assert!(!error.to_string().contains("graph rebuild"));
             assert!(
                 error.to_string().contains("FOREIGN KEY constraint failed"),
                 "{error}"
             );
             assert!(transaction.is_autocommit());
         }
+
         drop(transaction);
         drop(writer);
         assert_eq!(committed_version(&root), 0);
@@ -578,6 +582,44 @@ fn coordinated_build_activation_and_real_commit_failures_restore_old_state() {
         assert!(!graph.join("previous").exists());
         GraphRuntime::open(&root).unwrap();
     }
+}
+
+#[test]
+fn restored_commit_conflict_retains_retryable_category() {
+    let (_directory, root) = store();
+    let before = bytes(&root.join("graph/current"));
+    let mut writer = SqliteDatabase::write(&root, Duration::ZERO).unwrap();
+    let transaction = writer.transaction().unwrap();
+    pending(&transaction);
+    let error = publish_with(
+        &root,
+        &transaction,
+        Duration::ZERO,
+        "receipt",
+        crate::app::record::RECOVERY_GUIDANCE,
+        |phase, _| {
+            if phase == PublishPhase::BeforeCommit {
+                Err(CommonplaceError::Conflict(
+                    "injected commit conflict".into(),
+                ))
+            } else {
+                Ok(())
+            }
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error.code(), "conflict");
+    assert_eq!(error.exit_code(), 3);
+    assert!(error.to_string().contains("previous graph restored"));
+    assert!(!error.to_string().contains("graph rebuild"));
+    assert!(transaction.is_autocommit());
+    drop(transaction);
+    drop(writer);
+    assert_eq!(committed_version(&root), 0);
+    assert_eq!(bytes(&root.join("graph/current")), before);
+    assert!(!root.join("graph/candidate").exists());
+    assert!(!root.join("graph/previous").exists());
+    GraphRuntime::open(&root).unwrap();
 }
 
 #[test]

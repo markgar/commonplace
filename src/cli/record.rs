@@ -72,8 +72,10 @@ pub fn execute(root: &Path, args: RecordArgs) -> Result<CommandResponse> {
         .or(args.jsonl)
         .ok_or_else(|| CommonplaceError::InvalidInput("record JSON file is required".into()))?;
     let maximum_bytes = crate::app::schema::OperationConfig::default().maximum_input_bytes;
-    let bytes = input::read_bounded(std::fs::File::open(file)?, maximum_bytes, "record")?;
-    let request = decode(&bytes, jsonl, &schema)?;
+    let operation = if jsonl { "record --jsonl" } else { "record" };
+    let bytes = input::read_file(&file, maximum_bytes, operation)?;
+    let request = decode(&bytes, jsonl, &schema)
+        .map_err(|error| error.context(format!("{operation} input file {}", file.display())))?;
     let result = crate::app::record::record(root, request, Duration::from_secs(2))?;
     Ok(CommandResponse::new(
         "record",
@@ -103,9 +105,8 @@ fn decode(bytes: &[u8], jsonl: bool, schema: &schemars::Schema) -> Result<Record
     let mut request: Option<RecordInput> = None;
     for (line, bytes) in bytes.split(|byte| *byte == b'\n').enumerate() {
         let bytes = bytes.strip_suffix(b"\r").unwrap_or(bytes);
-        let part = fragment(bytes, schema).map_err(|error| {
-            CommonplaceError::InvalidInput(format!("JSONL line {}: {error}", line + 1))
-        })?;
+        let part = fragment(bytes, schema)
+            .map_err(|error| error.context(format!("JSONL line {}", line + 1)))?;
         if let Some(request) = &mut request {
             if request.created_by != part.created_by {
                 return Err(CommonplaceError::InvalidInput(format!(

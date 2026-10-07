@@ -21,7 +21,7 @@ pub fn remove(transaction: &Transaction<'_>, source_key: &str) -> Result<Removed
         .ok_or_else(|| {
             CommonplaceError::NotFound(format!("source key not found: {source_key:?}"))
         })?;
-    let document_id = DocumentId::new(document_id)?;
+    let document_id = DocumentId::stored(document_id)?;
     let revisions = transaction
         .prepare(
             "SELECT revision_id FROM document_revisions WHERE document_id=?1 ORDER BY revision_id",
@@ -62,11 +62,11 @@ pub fn remove(transaction: &Transaction<'_>, source_key: &str) -> Result<Removed
         detached_evidence: evidence.iter().map(|(_, count)| count).sum(),
         affected_knowledge_ids: evidence
             .into_iter()
-            .map(|(id, _)| KnowledgeItemId::new(id))
+            .map(|(id, _)| KnowledgeItemId::stored(id))
             .collect::<Result<_>>()?,
     };
     for revision in revisions {
-        search_index::remove_revision(transaction, RevisionId::new(revision)?)?;
+        search_index::remove_revision(transaction, RevisionId::stored(revision)?)?;
     }
     transaction
         .execute(
@@ -87,7 +87,7 @@ pub fn current(connection: &Connection, source_key: &str) -> Result<Option<Docum
         )
         .optional()
         .map_err(storage_error)?;
-    id.map(|id| evidence::revision(connection, RevisionId::new(id)?))
+    id.map(|id| evidence::revision(connection, RevisionId::stored(id)?))
         .transpose()
 }
 
@@ -183,7 +183,7 @@ pub fn publish(
             params![input.source_key, timestamp],
         ).map_err(storage_error)?;
         (
-            DocumentId::new(transaction.last_insert_rowid())?,
+            DocumentId::stored(transaction.last_insert_rowid())?,
             1,
             PublicationStatus::Added,
         )
@@ -207,7 +207,7 @@ pub fn publish(
             ],
         )
         .map_err(storage_error)?;
-    let revision_id = RevisionId::new(transaction.last_insert_rowid())?;
+    let revision_id = RevisionId::stored(transaction.last_insert_rowid())?;
     let mut passage_ids = Vec::new();
     for (range, vector) in prepared.ranges.iter().zip(&prepared.vectors) {
         let text = range.text(&input.text)?;
@@ -215,7 +215,7 @@ pub fn publish(
             "INSERT INTO passages(revision_id, ordinal, start_byte, end_byte, text) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![revision_id.value(), range.ordinal, range.start_byte, range.end_byte, text],
         ).map_err(storage_error)?;
-        let id = PassageId::new(transaction.last_insert_rowid())?;
+        let id = PassageId::stored(transaction.last_insert_rowid())?;
         search_index::insert(transaction, id, text, vector)?;
         passage_ids.push(id);
     }

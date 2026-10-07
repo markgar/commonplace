@@ -22,7 +22,7 @@ pub fn document(connection: &Connection, id: DocumentId) -> Result<Document> {
     let revision_ids = statement
         .query_map([id.value()], |row| row.get::<_, i64>(0))
         .map_err(storage_error)?
-        .map(|row| RevisionId::new(row.map_err(storage_error)?))
+        .map(|row| RevisionId::stored(row.map_err(storage_error)?))
         .collect::<Result<Vec<_>>>()?;
     let current_revision_id = *revision_ids
         .last()
@@ -76,7 +76,7 @@ pub fn revision(connection: &Connection, id: RevisionId) -> Result<DocumentRevis
         .map_err(storage_error)?
         .ok_or_else(|| not_found(id))?;
     Ok(DocumentRevision {
-        document_id: DocumentId::new(document_id)?,
+        document_id: DocumentId::stored(document_id)?,
         revision_id: id,
         source_key,
         revision_number,
@@ -84,9 +84,12 @@ pub fn revision(connection: &Connection, id: RevisionId) -> Result<DocumentRevis
         text,
         title,
         source_type,
-        temporal_state: decode_temporal_state(&temporal_state, occurred_at.as_deref())?,
+        temporal_state: decode_temporal_state(&temporal_state, occurred_at.as_deref())
+            .map_err(|error| error.context(format!("stored {id}")))?,
         occurred_at,
-        metadata: serde_json::from_str(&metadata_json)?,
+        metadata: serde_json::from_str(&metadata_json).map_err(|error| {
+            CommonplaceError::Storage(format!("invalid stored {id} metadata_json: {error}"))
+        })?,
         created_at,
         passage_ids: passage_ids(connection, id)?,
     })
@@ -99,7 +102,7 @@ pub fn passage_ids(connection: &Connection, revision_id: RevisionId) -> Result<V
     statement
         .query_map([revision_id.value()], |row| row.get::<_, i64>(0))
         .map_err(storage_error)?
-        .map(|row| PassageId::new(row.map_err(storage_error)?))
+        .map(|row| PassageId::stored(row.map_err(storage_error)?))
         .collect()
 }
 
@@ -110,7 +113,7 @@ pub fn passage(connection: &Connection, id: PassageId) -> Result<Evidence> {
         |row| Ok((row.get::<_, i64>(0)?, row.get::<_, usize>(1)?,
                   row.get::<_, usize>(2)?, row.get::<_, usize>(3)?, row.get::<_, String>(4)?)),
     ).optional().map_err(storage_error)?.ok_or_else(|| not_found(id))?;
-    let revision = revision(connection, RevisionId::new(revision_id)?)?;
+    let revision = revision(connection, RevisionId::stored(revision_id)?)?;
     if revision.text.get(start_byte..end_byte) != Some(text.as_str()) {
         return Err(CommonplaceError::Storage(format!(
             "stored passage {id} does not select its exact revision bytes"

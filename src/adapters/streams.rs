@@ -31,7 +31,7 @@ pub struct Record {
 
 fn temporal_fields(schema: &mut schemars::Schema) {
     schema.insert("allOf".into(), serde_json::json!([{
-        "if": {"properties": {"temporal_state": {"const": "dated"}}},
+        "if": {"required": ["temporal_state"], "properties": {"temporal_state": {"const": "dated"}}},
         "then": {"required": ["occurred_at"], "properties": {"occurred_at": {"type": "string", "format": "date-time"}}},
         "else": {"not": {"required": ["occurred_at"]}}
     }]));
@@ -64,15 +64,17 @@ pub fn stdin_item(
     InputItem {
         input: "stdin".into(),
         source_key: Some(source_key.clone()),
-        document: read_utf8(reader, maximum_bytes).map(|text| DocumentInput {
-            source_key,
-            text,
-            title: metadata.title.clone(),
-            source_type: metadata.source_type.clone(),
-            temporal_state: metadata.temporal_state,
-            occurred_at: metadata.occurred_at.clone(),
-            metadata: metadata.metadata.clone(),
-        }),
+        document: read_utf8(reader, maximum_bytes)
+            .map_err(|error| error.context("ingest stdin"))
+            .map(|text| DocumentInput {
+                source_key,
+                text,
+                title: metadata.title.clone(),
+                source_type: metadata.source_type.clone(),
+                temporal_state: metadata.temporal_state,
+                occurred_at: metadata.occurred_at.clone(),
+                metadata: metadata.metadata.clone(),
+            }),
     }
 }
 
@@ -154,9 +156,9 @@ pub fn parse_record(bytes: &[u8]) -> Result<Record> {
     let validator = jsonschema::validator_for(schema.as_value()).map_err(|error| {
         CommonplaceError::Storage(format!("invalid generated record schema: {error}"))
     })?;
-    validator.validate(&value).map_err(|error| {
-        invalid(format!("{error}; each record requires temporal_state: dated with RFC3339 occurred_at, or timeless/unknown with occurred_at omitted"))
-    })?;
+    validator
+        .validate(&value)
+        .map_err(|error| CommonplaceError::validation(&error))?;
     serde_json::from_value(value).map_err(invalid)
 }
 
@@ -264,17 +266,17 @@ impl<R: BufRead> Iterator for JsonLines<R> {
                     document: Ok(record.into()),
                 }),
                 Err(error) => Some(InputItem {
-                    input,
+                    input: input.clone(),
                     source_key: None,
-                    document: Err(error),
+                    document: Err(error.context(format!("ingest JSONL {input}"))),
                 }),
             },
             Err(error) => {
                 self.done = true;
                 Some(InputItem {
-                    input,
+                    input: input.clone(),
                     source_key: None,
-                    document: Err(error),
+                    document: Err(error.context(format!("cannot read ingest JSONL {input}"))),
                 })
             }
         }
@@ -410,5 +412,41 @@ mod tests {
         assert_eq!(cursor.position(), 11);
         let item = stdin_item(&b"\xff"[..], "key".into(), &metadata, 10);
         assert_eq!(item.document.unwrap_err().code(), "invalid_input");
+    }
+
+    #[test]
+    fn stream_runtime_errors_keep_stdin_or_file_line_context() {
+        struct Failed;
+        impl Read for Failed {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::from_raw_os_error(5))
+            }
+        }
+        impl BufRead for Failed {
+            fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+                Err(std::io::Error::from_raw_os_error(5))
+            }
+            fn consume(&mut self, _: usize) {}
+        }
+        let metadata = MetadataOverrides {
+            source_type: "text".into(),
+            temporal_state: TemporalState::Unknown,
+            title: None,
+            occurred_at: None,
+            metadata: Map::new(),
+        };
+        let error = stdin_item(Failed, "key".into(), &metadata, 1024)
+            .document
+            .unwrap_err();
+        assert_eq!(error.code(), "internal_error");
+        assert_eq!(error.exit_code(), 1);
+        assert!(error.to_string().contains("stdin"));
+        for label in ["stdin", "records.jsonl"] {
+            let mut items = JsonLines::new(Failed, label.into(), 1024, 10);
+            let error = items.next().unwrap().document.unwrap_err();
+            assert_eq!(error.code(), "internal_error");
+            assert!(error.to_string().contains(&format!("{label}:1")));
+            assert!(items.next().is_none());
+        }
     }
 }
