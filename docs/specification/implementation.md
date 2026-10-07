@@ -724,6 +724,22 @@ Run ordinary local fmt/clippy/all-target tests and independent blocker-only plan
 and final implementation reviews before authorized main integration. No personal
 store interaction, packaging/redeployment, Actions or broad platform CI.
 
+### 3.14c Failure-reporting repair
+
+**Packet:** [#58](https://github.com/markgar/commonplace/issues/58).
+Build on the integrated CLI, SQLite, and graph paths. Architecture section 10
+owns category preservation and boundary context; product section 9 owns output
+and recovery behavior. Keep the existing envelope, codes, commands, and durable
+formats, with no automatic store repair.
+
+**Acceptance:** exercise checked write, partial-write, and flush failures across
+mutation, query, and description responses; verify persisted state independently
+from response delivery, including partial ingestion outcomes. Cover all six file
+input modes, stdin/runtime I/O, generated-schema leaf diagnostics, corrupt stored
+IDs/metadata, database path kinds, real SQLite lock/commit failures, and usable
+restored Oxigraph state. Use disposable stores and local development checks;
+complete independent implementation review before handoff.
+
 ### 3.15 Packet delivery and integration rules
 
 - Use one accountable owner per packet. Start with two implementation lanes;

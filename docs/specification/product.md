@@ -840,6 +840,17 @@ The command line is the only stable programmatic interface. Commands return mach
 - explicit partial or truncated status; and
 - errors that identify the failed input and corrective action.
 
+Execution errors retain the existing JSON envelope and codes. File-input
+diagnostics identify the filename/option or stdin; malformed input identifies
+its field/index or JSONL physical line. Invalid stored data is a runtime failure,
+not invalid caller input. Ordinary output I/O failures must not panic. When stdout
+delivery fails after a mutation, an `internal_error` on writable stderr identifies
+the completed work and safe next action; incomplete stdout is not a valid result.
+Ingestion reports per-item outcomes and IDs without implying batch rollback or
+safe blind replay. Read-only delivery failures can be rerun. Successful rollback
+and graph restoration preserve the original commit-error category; actual graph
+recovery and post-commit cleanup failures remain separately identified.
+
 Primary commands are:
 
 ```text

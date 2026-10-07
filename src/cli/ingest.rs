@@ -268,7 +268,10 @@ pub(super) fn execute(
             (Box::new(io::stdin().lock()), "stdin".into())
         } else {
             (
-                Box::new(BufReader::new(std::fs::File::open(&path)?)),
+                Box::new(BufReader::new(super::input::open_file(
+                    &path,
+                    "ingest --jsonl",
+                )?)),
                 path.to_string_lossy().into_owned(),
             )
         };

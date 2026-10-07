@@ -99,7 +99,13 @@ impl SqliteDatabase {
             .write(true)
             .create(true)
             .truncate(false)
-            .open(root.join("writer.lock"))?;
+            .open(root.join("writer.lock"))
+            .map_err(|error| {
+                CommonplaceError::Io(error).context(format!(
+                    "cannot open writer lock {}",
+                    root.join("writer.lock").display()
+                ))
+            })?;
         let start = Instant::now();
         loop {
             match lock.try_lock() {
@@ -110,11 +116,17 @@ impl SqliteDatabase {
                     );
                 }
                 Err(std::fs::TryLockError::WouldBlock) => {
-                    return Err(CommonplaceError::Conflict(
-                        "store writer is busy; retry the operation".into(),
-                    ));
+                    return Err(CommonplaceError::Conflict(format!(
+                        "store writer is busy at {}; retry the operation",
+                        root.join("writer.lock").display()
+                    )));
                 }
-                Err(std::fs::TryLockError::Error(error)) => return Err(error.into()),
+                Err(std::fs::TryLockError::Error(error)) => {
+                    return Err(CommonplaceError::Io(error).context(format!(
+                        "cannot acquire writer lock {}",
+                        root.join("writer.lock").display()
+                    )));
+                }
             }
         }
         let connection = open_connection(
@@ -132,11 +144,24 @@ impl SqliteDatabase {
     }
 
     fn read_database(path: &Path) -> Result<SqliteReadSession> {
-        if !path.is_file() {
-            return Err(CommonplaceError::Conflict(format!(
-                "initialized store is missing its database: {}",
-                path.display()
-            )));
+        match std::fs::metadata(path) {
+            Ok(metadata) if metadata.is_file() => {}
+            Ok(_) => {
+                return Err(CommonplaceError::Conflict(format!(
+                    "initialized store database is not a regular file: {}",
+                    path.display()
+                )));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Err(CommonplaceError::Conflict(format!(
+                    "initialized store is missing its database: {}",
+                    path.display()
+                )));
+            }
+            Err(error) => {
+                return Err(CommonplaceError::Io(error)
+                    .context(format!("cannot inspect database {}", path.display())));
+            }
         }
 
         let connection = open_connection(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
@@ -236,7 +261,9 @@ fn validate_connection(connection: &Connection) -> Result<()> {
 
 fn open_connection(path: &Path, flags: OpenFlags) -> Result<Connection> {
     register_sqlite_vec();
-    let connection = Connection::open_with_flags(path, flags).map_err(storage_error)?;
+    let connection = Connection::open_with_flags(path, flags).map_err(|error| {
+        storage_error(error).context(format!("cannot open database {}", path.display()))
+    })?;
     connection
         .busy_timeout(Duration::ZERO)
         .map_err(storage_error)?;

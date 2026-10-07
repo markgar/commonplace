@@ -247,18 +247,15 @@ pub(super) fn read_utf8(reader: impl Read, maximum_bytes: usize) -> Result<Strin
 }
 
 fn source_error(path: &Path, error: std::io::Error) -> CommonplaceError {
-    CommonplaceError::InvalidInput(format!(
-        "cannot read {}: {error}; check the path and permissions",
-        path.display()
-    ))
+    CommonplaceError::input_io(format!("cannot read source {}", path.display()), error)
 }
 
 pub fn canonical_file_source_key(path: &Path) -> Result<String> {
     let canonical = std::fs::canonicalize(path).map_err(|error| {
-        CommonplaceError::InvalidInput(format!(
-            "cannot resolve source path {}: {error}",
-            path.display()
-        ))
+        CommonplaceError::input_io(
+            format!("cannot resolve source path {}", path.display()),
+            error,
+        )
     })?;
 
     url::Url::from_file_path(&canonical)
@@ -274,6 +271,27 @@ pub fn canonical_file_source_key(path: &Path) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_runtime_io_keeps_runtime_classification() {
+        for code in [5, 24] {
+            let error = source_error(
+                Path::new("source.txt"),
+                std::io::Error::from_raw_os_error(code),
+            );
+            assert_eq!(error.code(), "internal_error");
+            assert_eq!(error.exit_code(), 1);
+            assert!(error.to_string().contains("source.txt"));
+        }
+        for kind in [
+            std::io::ErrorKind::NotFound,
+            std::io::ErrorKind::PermissionDenied,
+        ] {
+            let error = source_error(Path::new("source.txt"), std::io::Error::from(kind));
+            assert_eq!(error.code(), "invalid_input");
+            assert_eq!(error.exit_code(), 2);
+        }
+    }
 
     #[test]
     fn bounded_utf8_reads_include_the_limit_and_retain_bytes() {

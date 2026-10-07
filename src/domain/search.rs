@@ -38,7 +38,12 @@ impl DocumentScope {
         let mut ids = self
             .document_ids
             .iter()
-            .map(|value| canonical_document_id(value))
+            .enumerate()
+            .map(|(index, value)| {
+                canonical_document_id(value).map_err(|error| {
+                    error.context(format!("scope document_ids[{index}] ({value:?})"))
+                })
+            })
             .collect::<Result<Vec<_>>>()?;
         ids.sort();
         ids.dedup();

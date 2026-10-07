@@ -18,15 +18,20 @@ pub fn read(connection: &Connection) -> Result<Vocabulary> {
         connection,
         "entity_types",
         "entity_type_id",
-        EntityTypeId::new,
+        EntityTypeId::stored,
     )?;
     let identifier_schemes = read_terms(
         connection,
         "identifier_schemes",
         "identifier_scheme_id",
-        IdentifierSchemeId::new,
+        IdentifierSchemeId::stored,
     )?;
-    let terms = read_terms(connection, "predicates", "predicate_id", PredicateId::new)?;
+    let terms = read_terms(
+        connection,
+        "predicates",
+        "predicate_id",
+        PredicateId::stored,
+    )?;
     let mut predicates = Vec::new();
     for term in terms {
         let kind: String = connection

@@ -595,6 +595,22 @@ knowledge, and withdrawal requests return one success or failure for the
 complete request. Workflows do not catch broad errors or return success-shaped
 fallbacks.
 
+Adding context preserves the typed cause unless a second rollback, restoration,
+or cleanup failure changes recovery. A failed SQLite commit with successful
+rollback and graph restoration retains its original category and does not advise
+rebuilding a usable graph. Post-commit cleanup remains distinct from response
+delivery failure.
+
+The CLI checks serialization, complete writes, and flushes for every success and
+error response. Delivery failures use `internal_error` and preserve operation
+receipts, including ingestion's per-item outcomes; error delivery itself must not
+panic or recurse when stderr is unavailable. Read-only results never imply a
+committed mutation. File-input boundaries classify caller-correctable
+path/type/access errors as `invalid_input`, while device/resource I/O and invalid
+stored values remain runtime/storage failures. Context identifies the operation,
+path, stored field/record, or input index/line. Validation diagnostics follow the
+generated schema's leaf constraints, not a parallel handwritten input schema.
+
 Freeze-marker conflicts use `conflict`. Filesystem or durability failures use
 `internal_error` with explicit safe-retry guidance; a successful final marker is
 never silently removed or rewritten.

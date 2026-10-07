@@ -302,11 +302,5 @@ pub fn record(root: &Path, input: RecordInput, timeout: Duration) -> Result<Reco
 }
 
 fn item_error(index: usize, error: CommonplaceError) -> CommonplaceError {
-    let message = format!("items[{index}] validation/write: {error}");
-    match error {
-        CommonplaceError::InvalidInput(_) => CommonplaceError::InvalidInput(message),
-        CommonplaceError::NotFound(_) => CommonplaceError::NotFound(message),
-        CommonplaceError::Conflict(_) => CommonplaceError::Conflict(message),
-        _ => CommonplaceError::Storage(message),
-    }
+    error.context(format!("items[{index}] validation/write"))
 }

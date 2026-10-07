@@ -16,11 +16,21 @@ pub struct InitResult {
 }
 
 pub fn initialize(requested_root: &Path) -> Result<InitResult> {
+    initialize_inner(requested_root)
+        .map_err(|error| error.context(format!("initialize store {}", requested_root.display())))
+}
+
+fn initialize_inner(requested_root: &Path) -> Result<InitResult> {
     let root = absolute_path(requested_root)?;
     let database_path = root.join("commonplace.sqlite3");
 
-    if root.exists() {
-        if !root.is_dir() {
+    let metadata = match std::fs::metadata(&root) {
+        Ok(metadata) => Some(metadata),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(CommonplaceError::Io(error).context("cannot inspect store path")),
+    };
+    if let Some(metadata) = metadata {
+        if !metadata.is_dir() {
             return Err(CommonplaceError::Conflict(format!(
                 "knowledge-base path is not a directory: {}",
                 root.display()
@@ -62,8 +72,16 @@ pub fn initialize(requested_root: &Path) -> Result<InitResult> {
 
     let staging_path = staging.keep();
     if let Err(error) = std::fs::rename(&staging_path, &root) {
-        let _ = std::fs::remove_dir_all(&staging_path);
-        return Err(CommonplaceError::Io(error));
+        let cleanup = std::fs::remove_dir_all(&staging_path);
+        let mut error = CommonplaceError::Io(error).context(format!(
+            "cannot publish staging store {} to {}",
+            staging_path.display(),
+            root.display()
+        ));
+        if let Err(cleanup) = cleanup {
+            error = error.context(format!("staging cleanup also failed: {cleanup}"));
+        }
+        return Err(error);
     }
 
     Ok(InitResult {

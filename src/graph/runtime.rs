@@ -59,11 +59,23 @@ impl GraphRuntime {
 
 pub fn initialize(root: &Path) -> Result<()> {
     let graph = root.join("graph");
-    fs::create_dir(&graph).map_err(graph_error)?;
+    fs::create_dir(&graph).map_err(|error| graph_io("create graph directory", &graph, error))?;
     File::create_new(graph.join("publication.lock"))
-        .map_err(graph_error)?
+        .map_err(|error| {
+            graph_io(
+                "create publication lock",
+                &graph.join("publication.lock"),
+                error,
+            )
+        })?
         .sync_all()
-        .map_err(graph_error)?;
+        .map_err(|error| {
+            graph_io(
+                "synchronize publication lock",
+                &graph.join("publication.lock"),
+                error,
+            )
+        })?;
     let sqlite = SqliteDatabase::read(root)?;
     let snapshot = GraphSnapshot::read(sqlite.connection())?;
     projection::build(&snapshot, &graph.join("current"))?;
@@ -74,8 +86,12 @@ pub fn initialize(root: &Path) -> Result<()> {
 pub fn rebuild(root: &Path, lock_timeout: Duration) -> Result<i64> {
     let _writer = SqliteDatabase::write(root, lock_timeout)?;
     let graph = root.join("graph");
-    if !graph.try_exists()? {
-        fs::create_dir(&graph).map_err(graph_error)?;
+    if !graph
+        .try_exists()
+        .map_err(|error| graph_io("inspect graph directory", &graph, error))?
+    {
+        fs::create_dir(&graph)
+            .map_err(|error| graph_io("create graph directory", &graph, error))?;
     }
     validate_graph_directory(&graph)?;
     let _lease = publication_lock(root, true, lock_timeout)?;
@@ -129,7 +145,13 @@ fn publish_with(
                 )));
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(graph_error(error)),
+            Err(error) => {
+                return Err(graph_io(
+                    "inspect graph scratch",
+                    &graph.join(scratch),
+                    error,
+                ));
+            }
         }
     }
     // Validate the committed graph under a reader lease, then close it before publication.
@@ -189,6 +211,7 @@ fn publish_with(
             )
         });
         let mut message = format!("knowledge commit failed: {error}");
+        let rollback_failed = rollback.is_err();
         if let Err(error) = rollback {
             message.push_str(&format!("; SQLite rollback failed: {error}"));
         }
@@ -196,7 +219,12 @@ fn publish_with(
             message.push_str(&format!("; graph restoration failed: {error}"));
             return Err(graph_error(message));
         }
-        let result = discard_candidate(&graph, graph_error(message));
+        let cause = if rollback_failed {
+            graph_error(message)
+        } else {
+            error.context("knowledge commit failed; SQLite rolled back and previous graph restored")
+        };
+        let result = discard_candidate(&graph, cause);
         drop(lease);
         return result;
     }
@@ -225,7 +253,7 @@ fn discard_candidate(graph: &Path, error: CommonplaceError) -> Result<()> {
 
 fn validate_graph_directory(graph: &Path) -> Result<()> {
     if fs::symlink_metadata(graph)
-        .map_err(graph_error)?
+        .map_err(|error| graph_io("inspect graph directory", graph, error))?
         .file_type()
         .is_symlink()
     {
@@ -241,7 +269,13 @@ fn publication_lock(root: &Path, exclusive: bool, timeout: Duration) -> Result<F
         .create(exclusive)
         .truncate(false)
         .open(root.join("graph/publication.lock"))
-        .map_err(graph_error)?;
+        .map_err(|error| {
+            graph_io(
+                "open publication lock",
+                &root.join("graph/publication.lock"),
+                error,
+            )
+        })?;
     let start = Instant::now();
     loop {
         let result = if exclusive {
@@ -257,26 +291,41 @@ fn publication_lock(root: &Path, exclusive: bool, timeout: Duration) -> Result<F
                 );
             }
             Err(fs::TryLockError::WouldBlock) => {
-                return Err(CommonplaceError::Conflict(
-                    "graph publication is busy; retry the operation".into(),
+                return Err(CommonplaceError::Conflict(format!(
+                    "graph publication is busy at {}; retry the operation",
+                    root.join("graph/publication.lock").display()
+                )));
+            }
+            Err(fs::TryLockError::Error(error)) => {
+                return Err(graph_io(
+                    "acquire publication lock",
+                    &root.join("graph/publication.lock"),
+                    error,
                 ));
             }
-            Err(fs::TryLockError::Error(error)) => return Err(graph_error(error)),
         }
     }
 }
 
 fn remove_scratch(path: &Path) -> Result<()> {
     match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.is_dir() => fs::remove_dir_all(path).map_err(graph_error),
-        Ok(_) => fs::remove_file(path).map_err(graph_error),
+        Ok(metadata) if metadata.is_dir() => fs::remove_dir_all(path)
+            .map_err(|error| graph_io("remove graph scratch directory", path, error)),
+        Ok(_) => {
+            fs::remove_file(path).map_err(|error| graph_io("remove graph scratch", path, error))
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(graph_error(error)),
+        Err(error) => Err(graph_io("inspect graph scratch", path, error)),
     }
 }
 
 fn sync_directory(path: &Path) -> Result<()> {
-    crate::storage::sync_directory(path).map_err(graph_error)
+    crate::storage::sync_directory(path)
+        .map_err(|error| graph_io("synchronize graph directory", path, error))
+}
+
+fn graph_io(operation: &str, path: &Path, error: std::io::Error) -> CommonplaceError {
+    graph_error(format!("{operation} {}: {error}", path.display()))
 }
 
 fn activate(
@@ -287,13 +336,17 @@ fn activate(
     let current = graph.join("current");
     let previous = graph.join("previous");
     let candidate = graph.join("candidate");
-    let had_current = current.try_exists().map_err(graph_error)?;
+    let had_current = current
+        .try_exists()
+        .map_err(|error| graph_io("inspect current graph", &current, error))?;
     if had_current {
-        rename(&current, &previous).map_err(graph_error)?;
+        rename(&current, &previous)
+            .map_err(|error| graph_io("retain current graph as previous", graph, error))?;
     }
     let mut activated = false;
     let activation = (|| {
-        rename(&candidate, &current).map_err(graph_error)?;
+        rename(&candidate, &current)
+            .map_err(|error| graph_io("activate candidate graph as current", graph, error))?;
         activated = true;
         sync(graph)
     })();
@@ -319,10 +372,12 @@ fn restore(
     mut sync: impl FnMut(&Path) -> Result<()>,
 ) -> Result<()> {
     if activated {
-        rename(&graph.join("current"), &graph.join("candidate")).map_err(graph_error)?;
+        rename(&graph.join("current"), &graph.join("candidate"))
+            .map_err(|error| graph_io("restore current graph to candidate", graph, error))?;
     }
     if had_current {
-        rename(&graph.join("previous"), &graph.join("current")).map_err(graph_error)?;
+        rename(&graph.join("previous"), &graph.join("current"))
+            .map_err(|error| graph_io("restore previous graph to current", graph, error))?;
     }
     sync(graph)
 }

@@ -22,6 +22,15 @@ macro_rules! tagged_id {
             pub const fn value(self) -> i64 {
                 self.0
             }
+
+            pub(crate) fn stored(value: i64) -> Result<Self> {
+                Self::new(value).map_err(|error| {
+                    CommonplaceError::Storage(format!(
+                        "invalid stored {} ID {value}: {error}",
+                        $prefix
+                    ))
+                })
+            }
         }
 
         impl Display for $name {

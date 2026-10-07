@@ -121,6 +121,32 @@ lease described below, separately from SQLite and the writer lock. Invalid input
 and input limits return exit 2; internal failures return exit 1. Execution
 failures are JSON on stderr; successes are JSON on stdout. Argument syntax errors
 use the standard CLI usage diagnostics.
+
+File-input errors identify the command option and filename (or stdin). Missing,
+wrong-kind, and inaccessible caller-supplied input paths are `invalid_input`;
+device/resource failures and corrupt stored IDs or metadata are `internal_error`,
+not mistakes in the caller's JSON. Validation reports the field/index and relevant
+generated-schema constraint; JSONL diagnostics retain physical-line context.
+`search --scope` expects a filename or `-` for stdin, never inline JSON.
+
+Every response checks serialization, writing, and flushing. If delivery fails
+after work completes, stderr reports `internal_error` (exit 1), not rollback or
+graph cleanup. It may be impossible to deliver even that error when stderr is
+closed. Discard incomplete stdout. Mutation delivery errors retain recovery
+information: rerun `init` to validate the store; inspect `schema show` before
+retrying apply; inspect graph queries after rebuild; follow record/remove/withdraw
+receipts rather than repeating committed mutations; rerun idempotent schema freeze.
+Ingestion retains its summary and each item's outcome, source key, canonical IDs,
+and failure details: successful items remain committed even in a partial batch.
+Inspect those outcomes before retrying individual failures; do not blindly replay
+the batch. A read-only delivery failure can be rerun without mutation.
+
+When an SQLite commit fails but rollback and graph restoration succeed, the
+original category is preserved (`conflict` for contention, `internal_error` for
+storage failure), without unnecessary rebuild advice. Restoration/cleanup failures
+report both causes and their recovery guidance. Actual post-commit cleanup remains
+`post_commit_cleanup`; it never implies that committed knowledge was rolled back.
+
 Schema/ingest descriptions never open the store; record descriptions read current
 vocabulary. Vocabulary operations neither load inference
 nor open or rebuild Oxigraph, and remain available when derived graph state is

@@ -81,7 +81,9 @@ fn freeze_with(
     })();
     if let Err(error) = write_result {
         return Err(CommonplaceError::Storage(format!(
-            "failed to install schema freeze marker: {error}. Rerun schema freeze; it is idempotent and replaces pending scratch"
+            "failed to install schema freeze marker at {} from {}: {error}. Rerun schema freeze; it is idempotent and replaces pending scratch",
+            final_path.display(),
+            pending_path.display()
         )));
     }
     sync_after_install(root, schema_version, &mut sync_directory)?;
@@ -133,7 +135,12 @@ fn remove_pending(path: &Path) -> Result<()> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(CommonplaceError::Io(error)),
+        Err(error) => {
+            return Err(CommonplaceError::Io(error).context(format!(
+                "cannot inspect schema freeze scratch {}",
+                path.display()
+            )));
+        }
     };
     let removal = if metadata.file_type().is_dir() {
         fs::remove_dir(path)
@@ -156,7 +163,8 @@ fn sync_after_install(
 ) -> Result<()> {
     sync_directory(root).map_err(|error| {
         CommonplaceError::Storage(format!(
-            "schema freeze at version {schema_version} may already be installed, but store directory durability could not be confirmed: {error}. Rerun schema freeze; it is idempotent"
+            "schema freeze at version {schema_version} may already be installed, but store directory {} durability could not be confirmed: {error}. Rerun schema freeze; it is idempotent",
+            root.display()
         ))
     })
 }
@@ -165,12 +173,15 @@ fn path_exists(path: &Path) -> Result<bool> {
     match fs::symlink_metadata(path) {
         Ok(_) => Ok(true),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(CommonplaceError::Io(error)),
+        Err(error) => Err(CommonplaceError::Io(error).context(format!(
+            "cannot inspect schema freeze path {}",
+            path.display()
+        ))),
     }
 }
 
 fn marker_error(path: &Path, error: std::io::Error) -> CommonplaceError {
-    CommonplaceError::Conflict(format!(
+    CommonplaceError::Storage(format!(
         "schema freeze marker is unavailable at {}: {error}",
         path.display()
     ))

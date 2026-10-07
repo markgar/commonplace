@@ -23,9 +23,9 @@ pub(super) fn validate(value: &Value, schema: &schemars::Schema) -> Result<()> {
     let validator = jsonschema::validator_for(schema.as_value()).map_err(|error| {
         CommonplaceError::Storage(format!("invalid generated input schema: {error}"))
     })?;
-    validator.validate(value).map_err(|error| {
-        CommonplaceError::InvalidInput(format!("{}: {error}", error.instance_path))
-    })
+    validator
+        .validate(value)
+        .map_err(|error| CommonplaceError::validation(&error))
 }
 
 pub fn describe() -> Result<Description> {
@@ -39,8 +39,30 @@ pub fn describe() -> Result<Description> {
 }
 
 pub fn read(path: &Path, maximum_bytes: usize) -> Result<SchemaInput> {
-    let file = std::fs::File::open(path)?;
+    let file = open_file(path, "schema apply")?;
     parse(file, maximum_bytes)
+        .map_err(|error| error.context(format!("schema apply input file {}", path.display())))
+}
+
+pub(super) fn open_file(path: &Path, operation: &str) -> Result<std::fs::File> {
+    let context = format!("cannot open {operation} input file {}", path.display());
+    let file =
+        std::fs::File::open(path).map_err(|error| CommonplaceError::input_io(&context, error))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| CommonplaceError::input_io(&context, error))?;
+    if metadata.is_dir() {
+        return Err(CommonplaceError::InvalidInput(format!(
+            "{operation} input path {} is a directory; supply a JSON file path",
+            path.display()
+        )));
+    }
+    Ok(file)
+}
+
+pub(super) fn read_file(path: &Path, maximum_bytes: usize, operation: &str) -> Result<Vec<u8>> {
+    read_bounded(open_file(path, operation)?, maximum_bytes, operation)
+        .map_err(|error| error.context(format!("{operation} input file {}", path.display())))
 }
 
 pub fn describe_scope() -> Result<Description> {
@@ -58,18 +80,36 @@ pub fn read_scope(path: &Path) -> Result<crate::domain::search::DocumentScope> {
         read_bounded(
             std::io::stdin().lock(),
             crate::domain::search::MAX_SCOPE_BYTES,
-            "scope",
-        )?
+            "--scope stdin",
+        )
     } else {
         read_bounded(
-            std::fs::File::open(path)?,
+            open_file(path, "--scope").map_err(|error| {
+                error.context(
+                    "--scope expects a JSON file path, not inline JSON; use --scope - for stdin",
+                )
+            })?,
             crate::domain::search::MAX_SCOPE_BYTES,
-            "scope",
-        )?
-    };
-    let scope: crate::domain::search::DocumentScope = serde_json::from_slice(&bytes)
-        .map_err(|error| CommonplaceError::InvalidInput(format!("invalid scope JSON: {error}")))?;
-    scope.validate()?;
+            "--scope",
+        )
+    }
+    .map_err(|error| error.context(format!("--scope input {}", path.display())))?;
+    let scope = (|| -> Result<crate::domain::search::DocumentScope> {
+        let value: Value = serde_json::from_slice(&bytes).map_err(|error| {
+            CommonplaceError::InvalidInput(format!("invalid scope JSON: {error}"))
+        })?;
+        let scope: crate::domain::search::DocumentScope =
+            serde_json::from_slice(&bytes).map_err(|error| {
+                CommonplaceError::InvalidInput(format!("invalid scope JSON: {error}"))
+            })?;
+        scope.validate()?;
+        validate(
+            &value,
+            &generated_schema::<crate::domain::search::DocumentScope>(),
+        )?;
+        Ok(scope)
+    })()
+    .map_err(|error| error.context(format!("--scope input {}", path.display())))?;
     Ok(scope)
 }
 
@@ -91,7 +131,10 @@ pub(super) fn read_bounded(
     let mut bytes = Vec::new();
     reader
         .take(maximum_bytes.saturating_add(1) as u64)
-        .read_to_end(&mut bytes)?;
+        .read_to_end(&mut bytes)
+        .map_err(|error| {
+            CommonplaceError::input_io(format!("cannot read {operation} input"), error)
+        })?;
     if bytes.len() > maximum_bytes {
         return Err(CommonplaceError::LimitExceeded(format!(
             "{operation} input exceeds the {maximum_bytes}-byte limit"
@@ -103,6 +146,33 @@ pub(super) fn read_bounded(
 #[cfg(test)]
 mod tests {
     use super::parse;
+
+    #[test]
+    fn read_failures_keep_input_or_runtime_category_and_context() {
+        struct Failed(std::io::ErrorKind);
+        impl std::io::Read for Failed {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(self.0.into())
+            }
+        }
+        for label in [
+            "schema apply",
+            "--scope stdin",
+            "record",
+            "record --jsonl",
+            "withdraw",
+        ] {
+            for (kind, code, exit) in [
+                (std::io::ErrorKind::PermissionDenied, "invalid_input", 2),
+                (std::io::ErrorKind::Other, "internal_error", 1),
+            ] {
+                let error = super::read_bounded(Failed(kind), 16, label).unwrap_err();
+                assert_eq!(error.code(), code);
+                assert_eq!(error.exit_code(), exit);
+                assert!(error.to_string().contains(label));
+            }
+        }
+    }
 
     #[test]
     fn input_limit_is_inclusive_and_read_is_bounded() {

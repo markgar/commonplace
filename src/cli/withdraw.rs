@@ -92,17 +92,20 @@ pub fn execute(root: &Path, args: WithdrawArgs) -> Result<CommandResponse> {
     let file = args
         .file
         .ok_or_else(|| CommonplaceError::InvalidInput("withdraw JSON file is required".into()))?;
-    let bytes = input::read_bounded(
-        std::fs::File::open(file)?,
+    let bytes = input::read_file(
+        &file,
         crate::app::schema::OperationConfig::default().maximum_input_bytes,
         "withdraw",
     )?;
-    let value: serde_json::Value = serde_json::from_slice(&bytes)
-        .map_err(|error| CommonplaceError::InvalidInput(error.to_string()))?;
-    input::validate(&value, &schema)?;
-    // Decode original bytes so duplicate fields cannot be silently collapsed.
-    let request = serde_json::from_slice(&bytes)
-        .map_err(|error| CommonplaceError::InvalidInput(error.to_string()))?;
+    let request = (|| -> Result<WithdrawInput> {
+        let value: serde_json::Value = serde_json::from_slice(&bytes)
+            .map_err(|error| CommonplaceError::InvalidInput(error.to_string()))?;
+        input::validate(&value, &schema)?;
+        // Decode original bytes so duplicate fields cannot be silently collapsed.
+        serde_json::from_slice(&bytes)
+            .map_err(|error| CommonplaceError::InvalidInput(error.to_string()))
+    })()
+    .map_err(|error| error.context(format!("withdraw input file {}", file.display())))?;
     Ok(CommandResponse::new(
         "withdraw",
         "complete",
