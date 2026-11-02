@@ -1,6 +1,8 @@
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
-use crate::domain::documents::{DocumentInput, DocumentRevision, Publication, PublicationStatus};
+use crate::domain::documents::{
+    DocumentInput, DocumentListItem, DocumentRevision, Publication, PublicationStatus,
+};
 use crate::domain::ids::{DocumentId, KnowledgeItemId, PassageId, RevisionId};
 use crate::domain::passages::PassageRange;
 use crate::domain::remove::RemovedSource;
@@ -8,6 +10,95 @@ use crate::providers::embeddings::validate_vectors;
 use crate::{CommonplaceError, Result};
 
 use super::{database::storage_error, evidence, search_index};
+
+pub fn list(
+    connection: &Connection,
+    after: Option<DocumentId>,
+    limit: usize,
+) -> Result<Vec<DocumentListItem>> {
+    let mut statement = connection
+        .prepare(
+            "SELECT document_id, source_key, created_at, last_ingested_at
+             FROM documents
+             WHERE document_id > ?1
+             ORDER BY document_id ASC
+             LIMIT ?2",
+        )
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map(
+            rusqlite::params![after.map_or(0, DocumentId::value), limit as i64],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            },
+        )
+        .map_err(storage_error)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(storage_error)?;
+
+    rows.into_iter()
+        .map(
+            |(document_id, source_key, created_at, last_ingested_at)| {
+                let document_id = DocumentId::stored(document_id)?;
+                let revision = connection
+                    .query_row(
+                        "SELECT revision_id, title, source_type, temporal_state, occurred_at, created_at
+                         FROM document_revisions
+                         WHERE document_id = ?1
+                         ORDER BY revision_number DESC
+                         LIMIT 1",
+                        [document_id.value()],
+                        |row| {
+                            Ok((
+                                row.get::<_, i64>(0)?,
+                                row.get::<_, Option<String>>(1)?,
+                                row.get::<_, String>(2)?,
+                                row.get::<_, String>(3)?,
+                                row.get::<_, Option<String>>(4)?,
+                                row.get::<_, String>(5)?,
+                            ))
+                        },
+                    )
+                    .optional()
+                    .map_err(storage_error)?
+                    .ok_or_else(|| {
+                        CommonplaceError::Storage(format!(
+                            "document {document_id} has no revision"
+                        ))
+                    })?;
+                let (
+                    revision_id,
+                    title,
+                    source_type,
+                    temporal_state,
+                    occurred_at,
+                    revision_created_at,
+                ) = revision;
+                let revision_id = RevisionId::stored(revision_id)?;
+                let temporal_state =
+                    evidence::decode_temporal_state(&temporal_state, occurred_at.as_deref())
+                        .map_err(|error| error.context(format!("stored {revision_id}")))?;
+                Ok(DocumentListItem {
+                    document_id,
+                    source_key,
+                    current_revision_id: revision_id,
+                    title,
+                    source_type,
+                    temporal_state,
+                    occurred_at,
+                    created_at,
+                    last_ingested_at,
+                    current_revision_created_at: revision_created_at,
+                })
+            },
+        )
+        .collect()
+}
 
 pub fn remove(transaction: &Transaction<'_>, source_key: &str) -> Result<RemovedSource> {
     let document_id: i64 = transaction

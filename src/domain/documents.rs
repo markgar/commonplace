@@ -175,6 +175,20 @@ pub struct Document {
 }
 
 #[derive(Debug, Serialize)]
+pub struct DocumentListItem {
+    pub document_id: DocumentId,
+    pub source_key: String,
+    pub current_revision_id: RevisionId,
+    pub title: Option<String>,
+    pub source_type: String,
+    pub temporal_state: TemporalState,
+    pub occurred_at: Option<String>,
+    pub created_at: String,
+    pub last_ingested_at: String,
+    pub current_revision_created_at: String,
+}
+
+#[derive(Debug, Serialize)]
 pub struct DocumentRevision {
     pub document_id: DocumentId,
     pub revision_id: RevisionId,

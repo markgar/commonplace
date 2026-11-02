@@ -36,6 +36,7 @@ pub enum CommandResult {
     DocumentScope(crate::domain::search::DocumentScope),
     Entities(crate::app::entity::EntityList),
     Entity(crate::domain::knowledge::Entity),
+    Documents(crate::app::document::DocumentList),
     Record(crate::app::record::RecordResult),
     RecordDescription(super::record::Description),
     Remove(crate::app::remove::RemoveResult),

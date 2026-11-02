@@ -730,6 +730,29 @@ fields and omitting metadata, not discarding relevant text. Each passage is alre
 bounded to 1024 UTF-8 bytes. Full metadata and historical revisions remain available
 via `get`. `truncated` describes collection cutoffs only, never text shortening.
 
+### Exhaustive document listing
+
+```sh
+commonplace document list
+commonplace document list --limit 100
+commonplace document list --after doc:42 --limit 100
+```
+
+`document list` enumerates every stored document, including empty and uncited
+documents, in ascending numeric document-ID order. Items contain only the
+document and current-revision summary fields: canonical document/revision IDs,
+source key, title, source type, temporal state, event timestamp, and ingestion
+timestamps. The command does not inspect search, graph, inference, or authored
+knowledge state.
+
+The limit defaults to 100 and accepts 1 through 1000. `--after` is an exclusive
+canonical `doc:N` keyset cursor and need not name an existing document. The result
+is `{items,truncated,next_after}`. `truncated` is true when another document
+exists after the returned page, and `next_after` is the last returned document
+ID only in that case. Repeat with `--after <next_after>`; there is no overall
+traversal cap. Complete exact records and historical revisions remain available
+through `get`.
+
 ### Read-only entity discovery
 
 ```sh
