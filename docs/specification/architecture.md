@@ -413,6 +413,19 @@ List applies active-membership and missing-identifier predicates in SQLite befor
 the ascending-ID sentinel limit; full metadata is hydrated only for retained IDs.
 No writer/graph lock, inference, graph open, or metadata mutation is involved.
 
+Document listing validates a typed document cursor and positive bounded page
+limit before opening the existing SQLite read session. It enumerates document
+rows in ascending numeric ID order with an exclusive keyset predicate and at
+most `limit + 1` document rows for sentinel detection. Current-revision summary
+hydration stays in the same read snapshot and does not load revision text,
+passages, revision history, user metadata, or knowledge. A document without its
+required revision is an explicit storage failure, not an inner-join omission.
+The application returns only the retained summaries, `truncated`, and
+`next_after` as defined in product section 9. There is no overall traversal cap,
+cross-invocation snapshot, persisted paging state, writer/graph lease, inference,
+graph access, or mutation. Existing `get` and graph-query workflows remain the
+independent inspection paths; no orchestration or new backend is introduced.
+
 `query_graph` first verifies version parity, then executes a parsed SPARQL SELECT
 through the native read-only store. It consumes at most `row_limit + 1` solutions
 from the native lazy iterator, drops that iterator, removes any extra sentinel

@@ -740,6 +740,57 @@ IDs/metadata, database path kinds, real SQLite lock/commit failures, and usable
 restored Oxigraph state. Use disposable stores and local development checks;
 complete independent implementation review before handoff.
 
+### 3.14d Exhaustive document listing
+
+**Packet:** [#60](https://github.com/markgar/commonplace/issues/60).
+Build on integrated document/revision storage and authoritative reads. Product
+section 9 owns the public listing contract; architecture section 6.7 and
+persistence section 5 own page-read boundaries. Specification preparation and
+review do not authorize implementation: pause for explicit user approval before
+changing application code.
+
+**Outcome:** callers enumerate every stored document without search ranking,
+graph membership, date filters, or schema/corpus assumptions, then inspect exact
+evidence and authored connections through existing `get` and graph queries.
+This slice adds only `document list` and its JSON result, with no passage-list
+or reverse-link command, totals, filters, inference, dependency, backend, index,
+durable format, migration, or graph mapping change.
+
+**Work:** add the typed listing result and SQLite keyset read, wire one
+application workflow through the CLI and existing response envelope, and document
+the shipped command in the root README when implementation lands. Use numeric
+document-ID order, one extra document for truncation detection, and current
+revision summaries in the same read snapshot without hydrating full text/history.
+Reuse store validation, temporal decoding, canonical IDs, error handling and
+read-session patterns. Do not silently drop corrupt documents.
+
+**Acceptance:** use disposable stores and real SQLite. Traverse more than one
+page through linked, wholly uncited, empty, dated, timeless, unknown-date, and
+multi-revision documents. Assert exact item fields against stored data and
+existing `get` records, latest-revision selection, ascending numeric order
+including IDs on both sides of 9/10, no duplicates or omissions, and current
+revision/passages resolving with exact ordinal/byte identity through existing
+reads. Prove historical-only citations do not affect listing inclusion or
+current-revision selection. Use the existing real Oxigraph fixture to demonstrate
+one document/revision citation query and an uncited document's empty result,
+without introducing a new query API or requiring models for listing.
+
+Cover empty stores, limits 1/default/1000, exact-full final pages, sentinel pages,
+exhausted and valid nonexisting/deleted cursors, invalid/wrong-kind cursors, and
+zero/oversized limits. Exercise the real CLI envelope, help and failure delivery.
+Listing must work with missing/unavailable graph state and no inference artifacts.
+Invalid stored IDs/temporal state and a missing revision must fail explicitly.
+Assert no application-owned writes or writer/graph lock acquisition.
+Controlled mutations between calls verify separate page snapshots rather than a
+promised whole-traversal snapshot; unchanged-store traversal remains exhaustive.
+Reuse existing deterministic ingestion fixtures for expensive inference.
+
+Before implementation approval, complete independent blocker-only rubber-duck
+review of this packet and concrete public contract. During implementation use
+worktree-local build output and local checks from README, followed by independent
+implementation review. No personal-store interaction, packaging/redeployment,
+Actions, merge, or release is authorized by this packet.
+
 ### 3.15 Packet delivery and integration rules
 
 - Use one accountable owner per packet. Start with two implementation lanes;
