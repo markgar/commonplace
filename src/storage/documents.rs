@@ -16,30 +16,53 @@ pub fn list(
     after: Option<DocumentId>,
     limit: usize,
 ) -> Result<Vec<DocumentListItem>> {
-    let mut statement = connection
-        .prepare(
-            "SELECT document_id, source_key, created_at, last_ingested_at
+    let mut statement = if after.is_some() {
+        connection
+            .prepare(
+                "SELECT document_id, source_key, created_at, last_ingested_at
              FROM documents
              WHERE document_id > ?1
              ORDER BY document_id ASC
              LIMIT ?2",
-        )
-        .map_err(storage_error)?;
-    let rows = statement
-        .query_map(
-            rusqlite::params![after.map_or(0, DocumentId::value), limit as i64],
-            |row| {
+            )
+            .map_err(storage_error)?
+    } else {
+        connection
+            .prepare(
+                "SELECT document_id, source_key, created_at, last_ingested_at
+                 FROM documents
+                 ORDER BY document_id ASC
+                 LIMIT ?1",
+            )
+            .map_err(storage_error)?
+    };
+    let rows = if let Some(after) = after {
+        statement
+            .query_map(rusqlite::params![after.value(), limit as i64], |row| {
                 Ok((
                     row.get::<_, i64>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
                 ))
-            },
-        )
-        .map_err(storage_error)?
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(storage_error)?;
+            })
+            .map_err(storage_error)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(storage_error)?
+    } else {
+        statement
+            .query_map([limit as i64], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })
+            .map_err(storage_error)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(storage_error)?
+    };
 
     rows.into_iter()
         .map(
