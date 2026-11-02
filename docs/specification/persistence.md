@@ -110,6 +110,14 @@ CREATE TABLE passages (
 The current revision is the greatest `revision_number` for a document. No
 mutable current flag is stored.
 
+Exhaustive document listing reads `documents` as the enumeration authority,
+including empty and uncited sources. Exclusive numeric `document_id` keyset
+paging and current-revision summary reads use the existing primary key and
+`UNIQUE (document_id, revision_number)` index in one SQLite read snapshot per
+page. A missing required revision is a storage error, not grounds to omit the
+document. Listing adds no table, index, durable cursor, format change, migration,
+or RDF projection. Product section 9 owns fields and pagination semantics.
+
 `metadata_json` is canonical compact JSON with recursively sorted object keys.
 `revision_digest` is SHA-256 over an unambiguous encoding of exact text and
 canonical user-visible metadata.

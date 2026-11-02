@@ -12,7 +12,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 
 use crate::Result;
-use crate::app::{get, graph, init, schema};
+use crate::app::{document, get, graph, init, schema};
 
 use self::output::{CommandResponse, CommandResult, ErrorResponse};
 
@@ -92,6 +92,11 @@ enum Command {
     Withdraw(withdraw::WithdrawArgs),
     /// Read document metadata, revision text, or an exact passage, entity, or knowledge item.
     Get { id: String },
+    /// Enumerate stored documents in numeric canonical-ID order.
+    Document {
+        #[command(subcommand)]
+        command: DocumentCommand,
+    },
     /// Discover or resolve authoritative entity metadata without writes or inference.
     Entity {
         #[command(subcommand)]
@@ -155,6 +160,19 @@ enum EntityCommand {
         value: Option<String>,
         #[arg(long, conflicts_with_all = ["name", "scheme", "value"])]
         id: Option<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum DocumentCommand {
+    /// Enumerate every stored document through SQLite keyset paging.
+    List {
+        /// Resume strictly after this canonical document ID.
+        #[arg(long)]
+        after: Option<String>,
+        /// Retained documents per page, 1 through 1000.
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
     },
 }
 
@@ -468,6 +486,13 @@ fn execute_command(
                 ))
             }
         },
+        Command::Document {
+            command: DocumentCommand::List { after, limit },
+        } => Ok(CommandResponse::new(
+            "document.list",
+            "complete",
+            CommandResult::Documents(document::list(&config.store, after.as_deref(), limit)?),
+        )),
         Command::Record(args) => record::execute(&config.store, args),
         Command::Remove(args) => remove::execute(&config.store, args),
         Command::Withdraw(args) => withdraw::execute(&config.store, args),
@@ -568,6 +593,9 @@ impl Command {
             Self::Entity {
                 command: EntityCommand::Resolve { .. },
             } => "entity.resolve",
+            Self::Document {
+                command: DocumentCommand::List { .. },
+            } => "document.list",
             Self::Get { .. } => "get",
             Self::Record(args) if args.describe => "record.describe",
             Self::Record(_) => "record",

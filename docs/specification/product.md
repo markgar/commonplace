@@ -865,6 +865,7 @@ commonplace schema freeze
 commonplace record
 commonplace withdraw
 commonplace get
+commonplace document list
 commonplace entity list
 commonplace entity resolve
 commonplace graph schema
@@ -907,6 +908,108 @@ store/model preparation. A selected missing store is created only by explicit
 `init`; other commands retain their existing failure. A selected model cache is
 strictly offline and never falls back or downloads when files are missing or
 corrupt.
+
+### Exhaustive document listing
+
+`commonplace document list [--after doc:N] [--limit N]` enumerates stored
+documents independently of search ranking, authored knowledge, vocabulary, and
+corpus. It has no selection filters. Empty documents, documents with unknown
+event dates, and documents with no graph connections are included.
+
+Each item summarizes one document and its current revision, defined by the
+greatest revision number. Items contain exactly:
+
+| Field | Meaning |
+| --- | --- |
+| `document_id` | Canonical document ID |
+| `source_key` | Exact stored source identity |
+| `current_revision_id` | Canonical ID of the current revision |
+| `title` | Current revision title, or null |
+| `source_type` | Current revision source type |
+| `temporal_state` | Current revision's `dated`, `timeless`, or `unknown` state |
+| `occurred_at` | Current revision event timestamp, or null for timeless/unknown |
+| `created_at` | Document's first-ingestion timestamp |
+| `last_ingested_at` | Document's most recent successful ingestion timestamp |
+| `current_revision_created_at` | Current revision's ingestion timestamp |
+
+Dates are exposed without filtering or inference. Operational timestamps are not
+substitutes for event time. No document text, passage IDs, revision history,
+user metadata, knowledge links, or aggregate counts are embedded in list items.
+Existing `get` reads provide complete records when needed.
+
+Ordering is ascending by numeric document ID, not lexicographic tagged-ID text.
+`--after` is an exclusive canonical `doc:N` cursor; it need not identify a
+currently existing document. Omission starts at the beginning. `--limit`
+defaults to 100 and accepts 1..1000. Unlike entity listing, zero is rejected so
+every truncated page can provide a usable continuation.
+
+Success uses the existing JSON envelope with operation `document.list`,
+contract version `"1"`, status `complete`, and
+`result: {items, truncated, next_after}`. `complete` means the page was delivered,
+not necessarily that enumeration is exhausted. `truncated` is true exactly when
+another document exists after the retained page in that read snapshot.
+`next_after` is the last returned document ID only when truncated, otherwise
+null. An empty store or exhausted cursor returns
+`{"items":[],"truncated":false,"next_after":null}`. A nonempty final page also
+has `truncated: false` and `next_after: null`.
+
+For example, after a truncated page ending at `doc:42`, the caller runs
+`commonplace document list --after doc:42` and repeats using each returned
+`next_after` until `truncated` is false. There is no overall traversal cap.
+Following this sequence from the beginning on an unchanged store returns every
+document exactly once, including empty and uncited documents.
+
+For example, `commonplace document list --limit 1` can return:
+
+```json
+{
+  "operation": "document.list",
+  "contract_version": "1",
+  "status": "complete",
+  "result": {
+    "items": [{
+      "document_id": "doc:1",
+      "source_key": "notes/example",
+      "current_revision_id": "revision:2",
+      "title": null,
+      "source_type": "note",
+      "temporal_state": "unknown",
+      "occurred_at": null,
+      "created_at": "2026-11-01T10:00:00Z",
+      "last_ingested_at": "2026-11-02T10:00:00Z",
+      "current_revision_created_at": "2026-11-02T10:00:00Z"
+    }],
+    "truncated": true,
+    "next_after": "doc:1"
+  }
+}
+```
+
+Each invocation reads one consistent SQLite snapshot. There is no cross-page
+snapshot, saved cursor state, or writer lock. Concurrent ingestion, revision
+replacement, or source removal can change later pages and subsequent `get` or
+graph results; a traversal during writes is not a point-in-time inventory.
+For a reproducible exhaustive audit, keep the store unchanged until the audit
+finishes. A cursor is a position, not a store identity or snapshot token; callers
+must use the same store throughout a traversal.
+
+Listing requires no inference or graph access and remains available when the
+derived graph is unavailable, provided the SQLite store is valid. Invalid stored
+IDs, temporal state, or a document missing its required revision fail explicitly,
+not as omitted documents or empty-success fallbacks. Wrong-kind or malformed
+cursors and out-of-range limits fail through normal CLI/input diagnostics.
+
+Callers inspect text with `get` using returned revision IDs, then ordered passage
+IDs and exact byte offsets. They may independently query the graph using canonical
+document/revision URIs to find active authored knowledge citing that evidence.
+A document-level query may find citations on historical revisions; restrict by
+revision to inspect current evidence. No graph rows means no matching active
+projected citations in a successful query, not that the source contains no
+relevant information. Graph errors must not be interpreted as no connections.
+This capability adds no domain-specific interpretation, reverse-link command,
+new passage-read command, filters, coverage report, or RDF projection changes.
+
+### Direct record reads
 
 `commonplace get ID` is the complete direct record read command. It accepts tagged
 document, revision, passage, entity, and knowledge-item IDs. Document results
