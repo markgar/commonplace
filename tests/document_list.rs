@@ -225,6 +225,13 @@ fn exhaustive_listing_traverses_numeric_ids_and_current_revisions() {
         current_revision["result"]["passage_ids"],
         json!(["passage:1"])
     );
+    let passage = store.success(&["get", "passage:1"]);
+    assert_eq!(passage["result"]["kind"], "passage");
+    assert_eq!(passage["result"]["revision_id"], "revision:2");
+    assert_eq!(passage["result"]["ordinal"], 0);
+    assert_eq!(passage["result"]["start_byte"], 0);
+    assert_eq!(passage["result"]["end_byte"], 12);
+    assert_eq!(passage["result"]["text"], "current text");
 
     let mut db = store.database();
     let transaction = db.transaction().unwrap();
@@ -433,9 +440,72 @@ fn listing_remains_independent_of_current_and_historical_graph_citations() {
             (historical_passage, historical_passage_id),
         )
         .unwrap();
+
+    let historical_revision_12: i64 = transaction
+        .query_row(
+            "SELECT revision_id FROM document_revisions
+             WHERE document_id=12 AND revision_number=1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
     transaction
         .execute(
-            "UPDATE store_state SET knowledge_version=2 WHERE singleton=1",
+            "INSERT INTO passages(revision_id,ordinal,start_byte,end_byte,text)
+             VALUES (?1,0,0,10,'alpha beta')",
+            [historical_revision_12],
+        )
+        .unwrap();
+    let historical_passage_12 = transaction.last_insert_rowid();
+    transaction
+        .execute(
+            "INSERT INTO document_revisions(
+                document_id,revision_number,revision_digest,text,title,source_type,
+                temporal_state,occurred_at,metadata_json,created_at
+             ) VALUES (
+                12,2,'3333333333333333333333333333333333333333333333333333333333333333',
+                'uncited current','Uncited current','note','unknown',NULL,'{}',
+                '2026-11-03T10:00:00Z'
+             )",
+            [],
+        )
+        .unwrap();
+    let current_revision_12 = transaction.last_insert_rowid();
+    transaction
+        .execute(
+            "INSERT INTO passages(revision_id,ordinal,start_byte,end_byte,text)
+             VALUES (?1,0,0,15,'uncited current')",
+            [current_revision_12],
+        )
+        .unwrap();
+
+    transaction
+        .execute(
+            "INSERT INTO knowledge_items(
+                knowledge_item_id,kind,schema_version,created_at,created_by,
+                withdrawn_at,withdrawn_by
+             ) VALUES (3,'type_membership',1,'2026-11-01T10:00:00Z','test',NULL,NULL)",
+            [],
+        )
+        .unwrap();
+    transaction
+        .execute(
+            "INSERT INTO entity_type_memberships(
+                knowledge_item_id,entity_id,entity_type_id
+             ) VALUES (3,?1,1)",
+            [entity_id],
+        )
+        .unwrap();
+    transaction
+        .execute(
+            "INSERT INTO knowledge_item_evidence(knowledge_item_id,passage_id)
+             VALUES (3,?1)",
+            [historical_passage_12],
+        )
+        .unwrap();
+    transaction
+        .execute(
+            "UPDATE store_state SET knowledge_version=3 WHERE singleton=1",
             [],
         )
         .unwrap();
@@ -454,17 +524,27 @@ fn listing_remains_independent_of_current_and_historical_graph_citations() {
             .any(|row| row[0]["value"] == "urn:commonplace:doc:1")
     );
     assert!(
-        !rows
-            .iter()
+        rows.iter()
             .any(|row| row[0]["value"] == "urn:commonplace:doc:12")
     );
 
-    let uncited = store.success(&[
+    let historical_scoped = store.success(&[
         "graph",
         "query",
-        "PREFIX c:<urn:commonplace:property:> SELECT DISTINCT ?knowledge WHERE {<urn:commonplace:doc:12> c:id ?id . ?knowledge c:evidence ?passage . ?passage c:revision ?revision . ?revision c:document <urn:commonplace:doc:12>} ",
+        "PREFIX c:<urn:commonplace:property:> SELECT DISTINCT ?revision WHERE {<urn:commonplace:knowledge:3> c:evidence ?passage . ?passage c:revision ?revision}",
     ]);
-    assert_eq!(uncited["result"]["rows"], json!([]));
+    assert_eq!(
+        historical_scoped["result"]["rows"],
+        json!([[{"type":"uri","value":format!("urn:commonplace:revision:{historical_revision_12}")}]])
+    );
+    let current_scoped = store.success(&[
+        "graph",
+        "query",
+        &format!(
+            "PREFIX c:<urn:commonplace:property:> SELECT DISTINCT ?knowledge WHERE {{?knowledge c:evidence ?passage . ?passage c:revision <urn:commonplace:revision:{current_revision_12}>}}"
+        ),
+    ]);
+    assert_eq!(current_scoped["result"]["rows"], json!([]));
 
     let listing = store.success(&["document", "list", "--limit", "1000"]);
     let items = listing["result"]["items"].as_array().unwrap();
@@ -478,5 +558,13 @@ fn listing_remains_independent_of_current_and_historical_graph_citations() {
     assert_eq!(
         current["current_revision_id"],
         format!("revision:{current_revision}")
+    );
+    let current_12 = items
+        .iter()
+        .find(|item| item["document_id"] == "doc:12")
+        .unwrap();
+    assert_eq!(
+        current_12["current_revision_id"],
+        format!("revision:{current_revision_12}")
     );
 }
